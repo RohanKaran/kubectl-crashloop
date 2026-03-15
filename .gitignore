@@ -1,4 +1,6 @@
 dist/
+.gocache/
 demo.gif
+plugin.yaml
 .DS_Store
 .gocache

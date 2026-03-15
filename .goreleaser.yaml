@@ -27,8 +27,6 @@ builds:
 
 archives:
   - id: kubectl-crashloop
-    builds:
-      - kubectl-crashloop
     name_template: "kubectl-crashloop_{{ .Os }}_{{ .Arch }}"
     formats:
       - tar.gz
