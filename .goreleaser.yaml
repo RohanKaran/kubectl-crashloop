@@ -1,0 +1,52 @@
+version: 2
+
+project_name: kubectl-crashloop
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - id: kubectl-crashloop
+    main: ./main.go
+    binary: kubectl-crashloop
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - darwin
+      - linux
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    ignore:
+      - goos: windows
+        goarch: arm64
+    ldflags:
+      - -s -w -X github.com/rohankaran/kubectl-crashloop/internal/version.buildVersion={{ .Version }} -X github.com/rohankaran/kubectl-crashloop/internal/version.buildCommit={{ .Commit }} -X github.com/rohankaran/kubectl-crashloop/internal/version.buildDate={{ .Date }}
+
+archives:
+  - id: kubectl-crashloop
+    builds:
+      - kubectl-crashloop
+    name_template: "kubectl-crashloop_{{ .Os }}_{{ .Arch }}"
+    formats:
+      - tar.gz
+    format_overrides:
+      - goos: windows
+        formats:
+          - zip
+    files:
+      - LICENSE
+      - README.md
+
+checksum:
+  name_template: checksums.txt
+
+changelog:
+  disable: true
+
+release:
+  github:
+    owner: rohankaran
+    name: kubectl-crashloop

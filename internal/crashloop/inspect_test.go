@@ -1,0 +1,313 @@
+package crashloop
+
+import (
+	"context"
+	"errors"
+	"strings"
+	"testing"
+	"time"
+
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/kubernetes/fake"
+)
+
+func TestInspectMergesEventsAndLastTerminationState(t *testing.T) {
+	t.Parallel()
+
+	base := time.Date(2026, 3, 15, 12, 0, 0, 0, time.UTC)
+
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "api-pod",
+			Namespace: "prod",
+			UID:       "pod-uid",
+		},
+		Status: corev1.PodStatus{
+			ContainerStatuses: []corev1.ContainerStatus{
+				{
+					Name: "api",
+					LastTerminationState: corev1.ContainerState{
+						Terminated: &corev1.ContainerStateTerminated{
+							Reason:     "OOMKilled",
+							ExitCode:   137,
+							Message:    "Killed after crossing memory limit.",
+							FinishedAt: metav1.NewTime(base),
+						},
+					},
+				},
+			},
+		},
+	}
+
+	sameCrashEvent := &corev1.Event{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:              "same-crash",
+			Namespace:         "prod",
+			CreationTimestamp: metav1.NewTime(base.Add(2 * time.Second)),
+		},
+		InvolvedObject: corev1.ObjectReference{
+			UID:       "pod-uid",
+			Namespace: "prod",
+			Name:      "api-pod",
+			FieldPath: "spec.containers{api}",
+		},
+		Type:          corev1.EventTypeWarning,
+		Reason:        "OOMKilled",
+		Message:       "Container api OOMKilled after crossing memory limit",
+		LastTimestamp: metav1.NewTime(base.Add(2 * time.Second)),
+	}
+
+	olderEvent := &corev1.Event{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:              "older-crash",
+			Namespace:         "prod",
+			CreationTimestamp: metav1.NewTime(base.Add(-3 * time.Minute)),
+		},
+		InvolvedObject: corev1.ObjectReference{
+			UID:       "pod-uid",
+			Namespace: "prod",
+			Name:      "api-pod",
+			FieldPath: "spec.containers{api}",
+		},
+		Type:          corev1.EventTypeWarning,
+		Reason:        "BackOff",
+		Message:       "Back-off restarting failed container api in pod api-pod_prod",
+		LastTimestamp: metav1.NewTime(base.Add(-3 * time.Minute)),
+	}
+
+	client := fake.NewSimpleClientset(pod, sameCrashEvent, olderEvent)
+	inspector := NewInspector(client)
+	inspector.now = func() time.Time { return base.Add(10 * time.Minute) }
+	inspector.logFetcher = func(context.Context, string, string, string, int64) (string, error) {
+		return "panic: runtime error: out of memory", nil
+	}
+
+	report, err := inspector.Inspect(context.Background(), Request{
+		Namespace:   "prod",
+		ContextName: "kind-prod",
+		PodName:     "api-pod",
+		TailLines:   5,
+		Limit:       10,
+	})
+	if err != nil {
+		t.Fatalf("Inspect() error = %v", err)
+	}
+
+	if len(report.Entries) != 2 {
+		t.Fatalf("len(report.Entries) = %d, want 2", len(report.Entries))
+	}
+	if report.Entries[0].Source != SourceLastTerminationState {
+		t.Fatalf("first source = %s, want %s", report.Entries[0].Source, SourceLastTerminationState)
+	}
+	if report.Entries[0].ExitCode == nil || *report.Entries[0].ExitCode != 137 {
+		t.Fatalf("first exit code = %v, want 137", report.Entries[0].ExitCode)
+	}
+	if !strings.Contains(report.Entries[0].TailLogs, "out of memory") {
+		t.Fatalf("expected merged entry to contain previous logs, got %q", report.Entries[0].TailLogs)
+	}
+	if report.Entries[1].Source != SourceEvent {
+		t.Fatalf("second source = %s, want %s", report.Entries[1].Source, SourceEvent)
+	}
+}
+
+func TestInspectAddsBaselineWarningWhenEventsExpire(t *testing.T) {
+	t.Parallel()
+
+	base := time.Date(2026, 3, 15, 12, 0, 0, 0, time.UTC)
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "api-pod",
+			Namespace: "prod",
+			UID:       "pod-uid",
+		},
+		Status: corev1.PodStatus{
+			ContainerStatuses: []corev1.ContainerStatus{
+				{
+					Name: "api",
+					LastTerminationState: corev1.ContainerState{
+						Terminated: &corev1.ContainerStateTerminated{
+							Reason:     "Error",
+							ExitCode:   1,
+							FinishedAt: metav1.NewTime(base),
+						},
+					},
+				},
+			},
+		},
+	}
+
+	client := fake.NewSimpleClientset(pod)
+	inspector := NewInspector(client)
+	inspector.logFetcher = func(context.Context, string, string, string, int64) (string, error) {
+		return "", nil
+	}
+
+	report, err := inspector.Inspect(context.Background(), Request{
+		Namespace: "prod",
+		PodName:   "api-pod",
+		TailLines: 5,
+		Limit:     10,
+	})
+	if err != nil {
+		t.Fatalf("Inspect() error = %v", err)
+	}
+
+	if len(report.Entries) != 1 {
+		t.Fatalf("len(report.Entries) = %d, want 1", len(report.Entries))
+	}
+	if len(report.Warnings) == 0 || !strings.Contains(report.Warnings[0], "Historical Events may have expired") {
+		t.Fatalf("expected TTL warning, got %#v", report.Warnings)
+	}
+}
+
+func TestInspectSupportsMultiContainerSortingAndFilter(t *testing.T) {
+	t.Parallel()
+
+	base := time.Date(2026, 3, 15, 12, 0, 0, 0, time.UTC)
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "api-pod",
+			Namespace: "prod",
+			UID:       "pod-uid",
+		},
+		Status: corev1.PodStatus{
+			ContainerStatuses: []corev1.ContainerStatus{
+				{
+					Name: "api",
+					LastTerminationState: corev1.ContainerState{
+						Terminated: &corev1.ContainerStateTerminated{
+							Reason:     "Error",
+							ExitCode:   1,
+							FinishedAt: metav1.NewTime(base.Add(-1 * time.Minute)),
+						},
+					},
+				},
+				{
+					Name: "worker",
+					LastTerminationState: corev1.ContainerState{
+						Terminated: &corev1.ContainerStateTerminated{
+							Reason:     "OOMKilled",
+							ExitCode:   137,
+							FinishedAt: metav1.NewTime(base.Add(-2 * time.Minute)),
+						},
+					},
+				},
+			},
+		},
+	}
+
+	workerEvent := &corev1.Event{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:              "worker-backoff",
+			Namespace:         "prod",
+			CreationTimestamp: metav1.NewTime(base.Add(-30 * time.Second)),
+		},
+		InvolvedObject: corev1.ObjectReference{
+			UID:       "pod-uid",
+			Namespace: "prod",
+			Name:      "api-pod",
+			FieldPath: "spec.containers{worker}",
+		},
+		Type:          corev1.EventTypeWarning,
+		Reason:        "BackOff",
+		Message:       "Back-off restarting failed container worker in pod api-pod_prod",
+		LastTimestamp: metav1.NewTime(base.Add(-30 * time.Second)),
+	}
+
+	client := fake.NewSimpleClientset(pod, workerEvent)
+	inspector := NewInspector(client)
+	inspector.logFetcher = func(context.Context, string, string, string, int64) (string, error) {
+		return "", nil
+	}
+
+	report, err := inspector.Inspect(context.Background(), Request{
+		Namespace: "prod",
+		PodName:   "api-pod",
+		TailLines: 5,
+		Limit:     10,
+	})
+	if err != nil {
+		t.Fatalf("Inspect() error = %v", err)
+	}
+
+	if len(report.Entries) != 3 {
+		t.Fatalf("len(report.Entries) = %d, want 3", len(report.Entries))
+	}
+	if report.Entries[0].Container != "worker" {
+		t.Fatalf("first container = %q, want worker", report.Entries[0].Container)
+	}
+	if report.Entries[1].Container != "api" {
+		t.Fatalf("second container = %q, want api", report.Entries[1].Container)
+	}
+
+	filtered, err := inspector.Inspect(context.Background(), Request{
+		Namespace: "prod",
+		PodName:   "api-pod",
+		Container: "worker",
+		TailLines: 5,
+		Limit:     10,
+	})
+	if err != nil {
+		t.Fatalf("Inspect() with filter error = %v", err)
+	}
+
+	for _, entry := range filtered.Entries {
+		if entry.Container != "worker" {
+			t.Fatalf("filtered entry container = %q, want worker", entry.Container)
+		}
+	}
+}
+
+func TestInspectWarnsWhenPreviousLogsAreUnavailable(t *testing.T) {
+	t.Parallel()
+
+	base := time.Date(2026, 3, 15, 12, 0, 0, 0, time.UTC)
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "api-pod",
+			Namespace: "prod",
+			UID:       "pod-uid",
+		},
+		Status: corev1.PodStatus{
+			ContainerStatuses: []corev1.ContainerStatus{
+				{
+					Name: "api",
+					LastTerminationState: corev1.ContainerState{
+						Terminated: &corev1.ContainerStateTerminated{
+							Reason:     "Error",
+							ExitCode:   1,
+							FinishedAt: metav1.NewTime(base),
+						},
+					},
+				},
+			},
+		},
+	}
+
+	client := fake.NewSimpleClientset(pod)
+	inspector := NewInspector(client)
+	inspector.logFetcher = func(context.Context, string, string, string, int64) (string, error) {
+		return "", errors.New("pods/log is forbidden")
+	}
+
+	report, err := inspector.Inspect(context.Background(), Request{
+		Namespace: "prod",
+		PodName:   "api-pod",
+		TailLines: 5,
+		Limit:     10,
+	})
+	if err != nil {
+		t.Fatalf("Inspect() error = %v", err)
+	}
+
+	if len(report.Entries) != 1 {
+		t.Fatalf("len(report.Entries) = %d, want 1", len(report.Entries))
+	}
+	if len(report.Warnings) == 0 || !strings.Contains(report.Warnings[0], "previous logs") {
+		t.Fatalf("expected previous logs warning, got %#v", report.Warnings)
+	}
+	if report.Entries[0].TailLogs != "" {
+		t.Fatalf("expected empty tail logs, got %q", report.Entries[0].TailLogs)
+	}
+}
