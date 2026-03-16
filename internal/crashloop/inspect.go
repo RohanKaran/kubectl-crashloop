@@ -101,7 +101,7 @@ func (i *Inspector) buildBaselineEntries(ctx context.Context, req Request, statu
 			Container: status.Name,
 			Timestamp: terminatedTimestamp(terminated).UTC(),
 			Reason:    firstNonEmpty(terminated.Reason, "Terminated"),
-			ExitCode:  intPtr(int(terminated.ExitCode)),
+			ExitCode:  new(int(terminated.ExitCode)),
 			Message:   strings.TrimSpace(terminated.Message),
 			Source:    SourceLastTerminationState,
 		}
@@ -431,10 +431,6 @@ func defaultLogFetcher(client kubernetes.Interface) logFetcher {
 
 		return strings.TrimSpace(string(payload)), nil
 	}
-}
-
-func intPtr(v int) *int {
-	return &v
 }
 
 func firstNonEmpty(values ...string) string {
