@@ -44,6 +44,11 @@ func newRootCmd(deps commandDependencies) *cobra.Command {
 				return cmd.Help()
 			}
 
+			colorMode, err := ui.ParseColorMode(opts.color)
+			if err != nil {
+				return err
+			}
+
 			return runRender(
 				cmd,
 				deps.inspect,
@@ -51,10 +56,7 @@ func newRootCmd(deps commandDependencies) *cobra.Command {
 				opts,
 				args[0],
 				ui.WidthAuto,
-				func() ui.ColorMode {
-					mode, _ := ui.ParseColorMode(opts.color)
-					return mode
-				},
+				colorMode,
 			)
 		},
 	}
@@ -127,7 +129,7 @@ func runRender(
 	opts rootOptions,
 	podName string,
 	width int,
-	resolveColor func() ui.ColorMode,
+	colorMode ui.ColorMode,
 ) error {
 	if opts.tailLines <= 0 {
 		return fmt.Errorf("--tail must be greater than 0")
@@ -139,15 +141,6 @@ func runRender(
 	format, err := ui.ParseOutputFormat(opts.output)
 	if err != nil {
 		return err
-	}
-
-	colorMode, err := ui.ParseColorMode(opts.color)
-	if err != nil {
-		return err
-	}
-
-	if resolveColor != nil {
-		colorMode = resolveColor()
 	}
 
 	report, err := inspect(cmd.Context(), configFlags, inspectOptions{

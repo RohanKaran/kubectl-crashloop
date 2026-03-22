@@ -47,10 +47,13 @@ func Render(report crashloop.CrashReport, opts RenderOptions) (string, error) {
 		}
 		return string(payload), nil
 	case OutputTable:
+		return renderTable(report, opts)
 	default:
 		return "", fmt.Errorf("unsupported output format %q", opts.Format)
 	}
+}
 
+func renderTable(report crashloop.CrashReport, opts RenderOptions) (string, error) {
 	if opts.Width <= 0 {
 		opts.Width = 100
 	}

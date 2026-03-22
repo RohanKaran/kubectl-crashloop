@@ -88,6 +88,36 @@ func TestRootCommandPassesFlagsToInspect(t *testing.T) {
 	}
 }
 
+func TestRootCommandRejectsInvalidColor(t *testing.T) {
+	t.Parallel()
+
+	cmd := newRootCmd(commandDependencies{
+		inspect: func(context.Context, *genericclioptions.ConfigFlags, inspectOptions) (*crashloop.CrashReport, error) {
+			t.Fatal("inspect should not be called when color parsing fails")
+			return nil, nil
+		},
+		demo: crashloop.DemoReport,
+		version: version.Info{
+			Version: "test",
+			Commit:  "abc123",
+			Date:    "2026-03-15T00:00:00Z",
+		},
+	})
+
+	var stdout bytes.Buffer
+	cmd.SetOut(&stdout)
+	cmd.SetErr(&stdout)
+	cmd.SetArgs([]string{"api-pod", "--color", "broken"})
+
+	err := cmd.Execute()
+	if err == nil {
+		t.Fatal("Execute() error = nil, want invalid color error")
+	}
+	if !strings.Contains(err.Error(), "unsupported color mode") {
+		t.Fatalf("unexpected error = %v", err)
+	}
+}
+
 func TestDemoCommandForcesColor(t *testing.T) {
 	t.Parallel()
 
