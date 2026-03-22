@@ -71,7 +71,9 @@ func (i *Inspector) Inspect(ctx context.Context, req Request) (*CrashReport, err
 			return nil, err
 		}
 	} else {
+		eventEntries, eventLogWarnings := i.attachCurrentLogsToEventEntries(ctx, req, selectedStatuses, baselineEntries, eventEntries)
 		report.Warnings = append(report.Warnings, eventWarnings...)
+		report.Warnings = append(report.Warnings, eventLogWarnings...)
 		if len(eventEntries) == 0 && len(baselineEntries) > 0 {
 			report.Warnings = append(report.Warnings, "Historical Events may have expired on this cluster; showing baseline pod termination state.")
 		}
@@ -406,6 +408,95 @@ func entryRichness(entry CrashEntry) int {
 		score++
 	}
 	return score
+}
+
+func (i *Inspector) attachCurrentLogsToEventEntries(
+	ctx context.Context,
+	req Request,
+	statuses []containerStatusRef,
+	baselineEntries []CrashEntry,
+	eventEntries []CrashEntry,
+) ([]CrashEntry, []string) {
+	if len(eventEntries) == 0 {
+		return eventEntries, nil
+	}
+
+	baselineContainers := make(map[string]struct{}, len(baselineEntries))
+	for _, entry := range baselineEntries {
+		if strings.TrimSpace(entry.Container) == "" {
+			continue
+		}
+		baselineContainers[entry.Container] = struct{}{}
+	}
+
+	latestEventIndex := make(map[string]int, len(eventEntries))
+	for idx, entry := range eventEntries {
+		if strings.TrimSpace(entry.Container) == "" {
+			continue
+		}
+
+		currentIdx, ok := latestEventIndex[entry.Container]
+		if !ok || eventEntries[currentIdx].Timestamp.Before(entry.Timestamp) {
+			latestEventIndex[entry.Container] = idx
+		}
+	}
+
+	var warnings []string
+	for _, status := range statuses {
+		if _, ok := baselineContainers[status.Name]; ok {
+			continue
+		}
+
+		idx, ok := latestEventIndex[status.Name]
+		if !ok {
+			continue
+		}
+		if strings.TrimSpace(eventEntries[idx].TailLogs) != "" {
+			continue
+		}
+
+		logs, warning := i.resolveCurrentLogsForEvent(ctx, req, status.Name)
+		if warning != "" {
+			warnings = append(warnings, warning)
+		}
+		if logs == "" {
+			continue
+		}
+
+		eventEntries[idx].TailLogs = logs
+		eventEntries[idx].TailLogSource = TailLogSourceCurrent
+	}
+
+	return eventEntries, warnings
+}
+
+func (i *Inspector) resolveCurrentLogsForEvent(ctx context.Context, req Request, container string) (string, string) {
+	payload, err := i.logFetcher(ctx, req.Namespace, req.PodName, container, req.TailLines, false)
+	if err != nil {
+		return "", fmt.Sprintf(
+			"No last termination state was available for container %q, and current logs could not be fetched: %v",
+			container,
+			err,
+		)
+	}
+
+	payload = strings.TrimSpace(payload)
+	if payload == "" {
+		return "", fmt.Sprintf("No last termination state was available for container %q, and current logs were empty.", container)
+	}
+
+	if reason := unavailableLogsReason(payload); reason != "" {
+		return "", fmt.Sprintf(
+			"No last termination state was available for container %q, and current logs were unavailable: %s",
+			container,
+			reason,
+		)
+	}
+
+	return payload, fmt.Sprintf(
+		"No last termination state was available for container %q; showing current container logs on the latest warning event.",
+		container,
+	)
 }
 
 func (i *Inspector) resolveTailLogs(ctx context.Context, req Request, container string) (string, TailLogSource, string) {
