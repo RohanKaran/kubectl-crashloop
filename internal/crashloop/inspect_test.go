@@ -318,6 +318,83 @@ func TestInspectWarnsWhenPreviousLogsAreUnavailable(t *testing.T) {
 	}
 }
 
+func TestInspectAttachesCurrentLogsToLatestEventWhenLastTerminationStateIsMissing(t *testing.T) {
+	t.Parallel()
+
+	base := time.Date(2026, 3, 22, 6, 1, 3, 0, time.UTC)
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "api-pod",
+			Namespace: "prod",
+			UID:       "pod-uid",
+		},
+		Status: corev1.PodStatus{
+			ContainerStatuses: []corev1.ContainerStatus{
+				{
+					Name: "api",
+					State: corev1.ContainerState{
+						Waiting: &corev1.ContainerStateWaiting{Reason: "CrashLoopBackOff"},
+					},
+					RestartCount: 9,
+				},
+			},
+		},
+	}
+
+	event := &corev1.Event{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:              "api-backoff",
+			Namespace:         "prod",
+			CreationTimestamp: metav1.NewTime(base),
+		},
+		InvolvedObject: corev1.ObjectReference{
+			UID:       "pod-uid",
+			Namespace: "prod",
+			Name:      "api-pod",
+			FieldPath: "spec.containers{api}",
+		},
+		Type:          corev1.EventTypeWarning,
+		Reason:        "BackOff",
+		Message:       "Back-off restarting failed container api in pod api-pod_prod",
+		LastTimestamp: metav1.NewTime(base),
+	}
+
+	client := fake.NewSimpleClientset(pod, event)
+	inspector := NewInspector(client)
+	inspector.logFetcher = func(_ context.Context, _, _, _ string, _ int64, previous bool) (string, error) {
+		if previous {
+			t.Fatal("previous logs should not be requested when last termination state is missing")
+		}
+		return "booting worker\nfailing on purpose", nil
+	}
+
+	report, err := inspector.Inspect(context.Background(), Request{
+		Namespace: "prod",
+		PodName:   "api-pod",
+		TailLines: 5,
+		Limit:     10,
+	})
+	if err != nil {
+		t.Fatalf("Inspect() error = %v", err)
+	}
+
+	if len(report.Entries) != 1 {
+		t.Fatalf("len(report.Entries) = %d, want 1", len(report.Entries))
+	}
+	if report.Entries[0].Source != SourceEvent {
+		t.Fatalf("entry source = %q, want %q", report.Entries[0].Source, SourceEvent)
+	}
+	if report.Entries[0].TailLogs != "booting worker\nfailing on purpose" {
+		t.Fatalf("tail logs = %q, want current logs fallback", report.Entries[0].TailLogs)
+	}
+	if report.Entries[0].TailLogSource != TailLogSourceCurrent {
+		t.Fatalf("tail log source = %q, want %q", report.Entries[0].TailLogSource, TailLogSourceCurrent)
+	}
+	if len(report.Warnings) == 0 || !strings.Contains(report.Warnings[0], "latest warning event") {
+		t.Fatalf("expected latest warning event warning, got %#v", report.Warnings)
+	}
+}
+
 func TestInspectFallsBackToCurrentLogsWhenPreviousLogsPayloadIsUnavailable(t *testing.T) {
 	t.Parallel()
 
