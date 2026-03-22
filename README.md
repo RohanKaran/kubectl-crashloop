@@ -1,10 +1,11 @@
 # kubectl-crashloop
 
-`kubectl-crashloop` is a focused `kubectl` plugin and standalone CLI for inspecting pod crash history. It merges warning Events, `LastTerminationState`, and previous logs into one readable terminal report, with JSON output for automation.
+`kubectl-crashloop` is a focused `kubectl` plugin and standalone CLI for inspecting pod crash history. It merges warning Events, `LastTerminationState`, and container logs into one readable terminal report. When previous logs are unavailable, it can surface labeled current-container logs as a fallback. JSON output is available for automation.
 
 ## Features
 
-- Direct pod UX: `kubectl crashloop POD` or `kubectl-crashloop POD`
+- Direct pod UX for a single pod: `kubectl crashloop POD` or `kubectl-crashloop POD`
+- Best-effort log correlation: previous logs when available, labeled current-log fallback when not
 - Human-first terminal output styled with `lipgloss` and `lipgloss/table`
 - Deterministic `demo` command for README screenshots, VHS tapes, and release notes
 - JSON output for scripts and incident tooling
@@ -24,6 +25,8 @@ go run . my-pod -n production -o json
 kubectl-crashloop POD [-n namespace] [--context CTX] [--kubeconfig PATH] [-c container] [--tail 5] [--limit 10] [-o table|json] [--color auto|always|never]
 ```
 
+This command is pod-scoped. Pass a pod name, not a Deployment name. If you want to inspect a Deployment, first pick one replica pod and run the tool against that pod.
+
 Examples:
 
 ```bash
@@ -33,9 +36,15 @@ kubectl-crashloop payments-api-6d9c9b77d9-x2n5k -n production -o json
 kubectl-crashloop demo
 ```
 
+## Scope And Limits
+
+- Single-pod view: the command does not aggregate crash history across every pod in a Deployment, ReplicaSet, or StatefulSet.
+- Best-effort crash context: it uses Kubernetes pod status, warning Events, and current/previous log APIs.
+- Not a durable log store: older restart logs can still disappear from the node runtime. For retained historical logs across many restarts, use external log aggregation.
+
 ## Permissions
 
-This plugin needs namespace-scoped read access to pods, previous logs, and warning Events.
+This plugin needs namespace-scoped read access to pods, current/previous logs, and warning Events.
 
 Required verbs:
 
@@ -114,5 +123,6 @@ Check that:
 
 - Warning Events appear when available
 - Baseline `LastTerminationState` appears even if Events have expired
-- Previous logs attach to the matching container row
+- Previous logs attach to the matching container row when available
+- Current logs appear as a labeled fallback when previous logs are unavailable
 - JSON output contains no ANSI escape sequences
