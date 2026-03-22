@@ -293,12 +293,23 @@ func renderDetails(entry crashloop.CrashEntry) string {
 		parts = append(parts, entry.Message)
 	}
 	if strings.TrimSpace(entry.TailLogs) != "" {
-		parts = append(parts, "logs:\n"+entry.TailLogs)
+		parts = append(parts, renderTailLogsLabel(entry)+":\n"+entry.TailLogs)
 	}
 	if len(parts) == 0 {
 		return "n/a"
 	}
 	return strings.Join(parts, "\n")
+}
+
+func renderTailLogsLabel(entry crashloop.CrashEntry) string {
+	switch entry.TailLogSource {
+	case crashloop.TailLogSourceCurrent:
+		return "current logs"
+	case crashloop.TailLogSourcePrevious:
+		return "previous logs"
+	default:
+		return "logs"
+	}
 }
 
 func groupEntries(entries []crashloop.CrashEntry) []group {

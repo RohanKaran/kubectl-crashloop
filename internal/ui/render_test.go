@@ -60,13 +60,14 @@ func TestRenderTableGroupsEntriesWithoutANSIWhenColorNever(t *testing.T) {
 		Warnings:    []string{"Historical Events may have expired on this cluster."},
 		Entries: []crashloop.CrashEntry{
 			{
-				Container: "api",
-				Timestamp: time.Date(2026, 3, 15, 12, 0, 0, 0, time.UTC),
-				Reason:    "OOMKilled",
-				ExitCode:  &exit137,
-				Message:   "Exceeded memory limit",
-				TailLogs:  "panic: out of memory",
-				Source:    crashloop.SourceLastTerminationState,
+				Container:     "api",
+				Timestamp:     time.Date(2026, 3, 15, 12, 0, 0, 0, time.UTC),
+				Reason:        "OOMKilled",
+				ExitCode:      &exit137,
+				Message:       "Exceeded memory limit",
+				TailLogs:      "panic: out of memory",
+				TailLogSource: crashloop.TailLogSourcePrevious,
+				Source:        crashloop.SourceLastTerminationState,
 			},
 			{
 				Container: "worker",
@@ -94,7 +95,42 @@ func TestRenderTableGroupsEntriesWithoutANSIWhenColorNever(t *testing.T) {
 	if !strings.Contains(out, "container: api") || !strings.Contains(out, "container: worker") {
 		t.Fatalf("group headings missing from table output: %q", out)
 	}
-	if !strings.Contains(out, "logs:") {
-		t.Fatalf("expected logs section in output: %q", out)
+	if !strings.Contains(out, "previous logs:") {
+		t.Fatalf("expected previous logs section in output: %q", out)
+	}
+}
+
+func TestRenderTableLabelsCurrentLogsFallback(t *testing.T) {
+	t.Parallel()
+
+	exit42 := 42
+	report := crashloop.CrashReport{
+		PodName:   "api-pod",
+		Namespace: "prod",
+		Entries: []crashloop.CrashEntry{
+			{
+				Container:     "api",
+				Timestamp:     time.Date(2026, 3, 15, 12, 0, 0, 0, time.UTC),
+				Reason:        "Error",
+				ExitCode:      &exit42,
+				TailLogs:      "starting\nfailing on purpose",
+				TailLogSource: crashloop.TailLogSourceCurrent,
+				Source:        crashloop.SourceLastTerminationState,
+			},
+		},
+	}
+
+	out, err := Render(report, RenderOptions{
+		Format:    OutputTable,
+		ColorMode: ColorNever,
+		Width:     100,
+		Writer:    &bytes.Buffer{},
+	})
+	if err != nil {
+		t.Fatalf("Render() error = %v", err)
+	}
+
+	if !strings.Contains(out, "current logs:") {
+		t.Fatalf("expected current logs label in output: %q", out)
 	}
 }

@@ -19,7 +19,7 @@ import (
 
 var fieldPathContainerPattern = regexp.MustCompile(`\{([^}]+)\}`)
 
-type logFetcher func(context.Context, string, string, string, int64) (string, error)
+type logFetcher func(context.Context, string, string, string, int64, bool) (string, error)
 
 type Inspector struct {
 	client     kubernetes.Interface
@@ -101,7 +101,7 @@ func (i *Inspector) buildBaselineEntries(ctx context.Context, req Request, statu
 			Container: status.Name,
 			Timestamp: terminatedTimestamp(terminated).UTC(),
 			Reason:    firstNonEmpty(terminated.Reason, "Terminated"),
-			ExitCode:  new(int(terminated.ExitCode)),
+			ExitCode:  intPtr(int(terminated.ExitCode)),
 			Message:   strings.TrimSpace(terminated.Message),
 			Source:    SourceLastTerminationState,
 		}
@@ -109,11 +109,13 @@ func (i *Inspector) buildBaselineEntries(ctx context.Context, req Request, statu
 			entry.Message = fmt.Sprintf("Terminated by signal %d.", terminated.Signal)
 		}
 
-		logs, err := i.logFetcher(ctx, req.Namespace, req.PodName, status.Name, req.TailLines)
-		if err != nil {
-			warnings = append(warnings, fmt.Sprintf("Unable to fetch previous logs for container %q: %v", status.Name, err))
-		} else {
-			entry.TailLogs = strings.TrimSpace(logs)
+		logs, source, warning := i.resolveTailLogs(ctx, req, status.Name)
+		if warning != "" {
+			warnings = append(warnings, warning)
+		}
+		if logs != "" {
+			entry.TailLogs = logs
+			entry.TailLogSource = source
 		}
 
 		entries = append(entries, entry)
@@ -378,6 +380,9 @@ func mergePair(a, b CrashEntry) CrashEntry {
 	}
 	if primary.TailLogs == "" {
 		primary.TailLogs = secondary.TailLogs
+		primary.TailLogSource = secondary.TailLogSource
+	} else if primary.TailLogSource == "" {
+		primary.TailLogSource = secondary.TailLogSource
 	}
 	if primary.Source != SourceLastTerminationState && secondary.Source == SourceLastTerminationState {
 		primary.Source = secondary.Source
@@ -403,6 +408,55 @@ func entryRichness(entry CrashEntry) int {
 	return score
 }
 
+func (i *Inspector) resolveTailLogs(ctx context.Context, req Request, container string) (string, TailLogSource, string) {
+	payload, err := i.logFetcher(ctx, req.Namespace, req.PodName, container, req.TailLines, true)
+	if err == nil {
+		payload = strings.TrimSpace(payload)
+		switch reason := unavailableLogsReason(payload); {
+		case reason != "":
+			return i.fallbackToCurrentLogs(ctx, req, container, reason)
+		case payload != "":
+			return payload, TailLogSourcePrevious, ""
+		default:
+			return "", "", ""
+		}
+	}
+
+	return i.fallbackToCurrentLogs(ctx, req, container, err.Error())
+}
+
+func (i *Inspector) fallbackToCurrentLogs(ctx context.Context, req Request, container, previousFailure string) (string, TailLogSource, string) {
+	payload, err := i.logFetcher(ctx, req.Namespace, req.PodName, container, req.TailLines, false)
+	if err != nil {
+		return "", "", fmt.Sprintf(
+			"Previous logs for container %q were unavailable: %s. Current log fallback failed: %v",
+			container,
+			previousFailure,
+			err,
+		)
+	}
+
+	payload = strings.TrimSpace(payload)
+	if payload == "" {
+		return "", "", fmt.Sprintf("Previous logs for container %q were unavailable: %s", container, previousFailure)
+	}
+
+	if reason := unavailableLogsReason(payload); reason != "" {
+		return "", "", fmt.Sprintf(
+			"Previous logs for container %q were unavailable: %s. Current log fallback was also unavailable: %s",
+			container,
+			previousFailure,
+			reason,
+		)
+	}
+
+	return payload, TailLogSourceCurrent, fmt.Sprintf(
+		"Previous logs for container %q were unavailable: %s. Showing current container logs instead.",
+		container,
+		previousFailure,
+	)
+}
+
 func sourcePriority(entry CrashEntry) int {
 	if entry.Source == SourceLastTerminationState {
 		return 0
@@ -411,10 +465,10 @@ func sourcePriority(entry CrashEntry) int {
 }
 
 func defaultLogFetcher(client kubernetes.Interface) logFetcher {
-	return func(ctx context.Context, namespace, podName, container string, tailLines int64) (string, error) {
+	return func(ctx context.Context, namespace, podName, container string, tailLines int64, previous bool) (string, error) {
 		req := client.CoreV1().Pods(namespace).GetLogs(podName, &corev1.PodLogOptions{
 			Container: container,
-			Previous:  true,
+			Previous:  previous,
 			TailLines: &tailLines,
 		})
 
@@ -431,6 +485,24 @@ func defaultLogFetcher(client kubernetes.Interface) logFetcher {
 
 		return strings.TrimSpace(string(payload)), nil
 	}
+}
+
+func unavailableLogsReason(payload string) string {
+	trimmed := strings.TrimSpace(payload)
+	lower := strings.ToLower(trimmed)
+
+	switch {
+	case strings.Contains(lower, "unable to retrieve container logs for"):
+		return trimmed
+	case strings.Contains(lower, "previous terminated container"):
+		return trimmed
+	default:
+		return ""
+	}
+}
+
+func intPtr(v int) *int {
+	return &v
 }
 
 func firstNonEmpty(values ...string) string {

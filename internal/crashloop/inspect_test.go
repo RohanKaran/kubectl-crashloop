@@ -79,7 +79,7 @@ func TestInspectMergesEventsAndLastTerminationState(t *testing.T) {
 	client := fake.NewSimpleClientset(pod, sameCrashEvent, olderEvent)
 	inspector := NewInspector(client)
 	inspector.now = func() time.Time { return base.Add(10 * time.Minute) }
-	inspector.logFetcher = func(context.Context, string, string, string, int64) (string, error) {
+	inspector.logFetcher = func(context.Context, string, string, string, int64, bool) (string, error) {
 		return "panic: runtime error: out of memory", nil
 	}
 
@@ -105,6 +105,9 @@ func TestInspectMergesEventsAndLastTerminationState(t *testing.T) {
 	}
 	if !strings.Contains(report.Entries[0].TailLogs, "out of memory") {
 		t.Fatalf("expected merged entry to contain previous logs, got %q", report.Entries[0].TailLogs)
+	}
+	if report.Entries[0].TailLogSource != TailLogSourcePrevious {
+		t.Fatalf("first log source = %s, want %s", report.Entries[0].TailLogSource, TailLogSourcePrevious)
 	}
 	if report.Entries[1].Source != SourceEvent {
 		t.Fatalf("second source = %s, want %s", report.Entries[1].Source, SourceEvent)
@@ -139,7 +142,7 @@ func TestInspectAddsBaselineWarningWhenEventsExpire(t *testing.T) {
 
 	client := fake.NewSimpleClientset(pod)
 	inspector := NewInspector(client)
-	inspector.logFetcher = func(context.Context, string, string, string, int64) (string, error) {
+	inspector.logFetcher = func(context.Context, string, string, string, int64, bool) (string, error) {
 		return "", nil
 	}
 
@@ -217,7 +220,7 @@ func TestInspectSupportsMultiContainerSortingAndFilter(t *testing.T) {
 
 	client := fake.NewSimpleClientset(pod, workerEvent)
 	inspector := NewInspector(client)
-	inspector.logFetcher = func(context.Context, string, string, string, int64) (string, error) {
+	inspector.logFetcher = func(context.Context, string, string, string, int64, bool) (string, error) {
 		return "", nil
 	}
 
@@ -287,7 +290,7 @@ func TestInspectWarnsWhenPreviousLogsAreUnavailable(t *testing.T) {
 
 	client := fake.NewSimpleClientset(pod)
 	inspector := NewInspector(client)
-	inspector.logFetcher = func(context.Context, string, string, string, int64) (string, error) {
+	inspector.logFetcher = func(context.Context, string, string, string, int64, bool) (string, error) {
 		return "", errors.New("pods/log is forbidden")
 	}
 
@@ -304,10 +307,72 @@ func TestInspectWarnsWhenPreviousLogsAreUnavailable(t *testing.T) {
 	if len(report.Entries) != 1 {
 		t.Fatalf("len(report.Entries) = %d, want 1", len(report.Entries))
 	}
-	if len(report.Warnings) == 0 || !strings.Contains(report.Warnings[0], "previous logs") {
+	if len(report.Warnings) == 0 || !strings.Contains(strings.ToLower(report.Warnings[0]), "previous logs") {
 		t.Fatalf("expected previous logs warning, got %#v", report.Warnings)
 	}
 	if report.Entries[0].TailLogs != "" {
 		t.Fatalf("expected empty tail logs, got %q", report.Entries[0].TailLogs)
+	}
+	if report.Entries[0].TailLogSource != "" {
+		t.Fatalf("expected empty tail log source, got %q", report.Entries[0].TailLogSource)
+	}
+}
+
+func TestInspectFallsBackToCurrentLogsWhenPreviousLogsPayloadIsUnavailable(t *testing.T) {
+	t.Parallel()
+
+	base := time.Date(2026, 3, 15, 12, 0, 0, 0, time.UTC)
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "api-pod",
+			Namespace: "prod",
+			UID:       "pod-uid",
+		},
+		Status: corev1.PodStatus{
+			ContainerStatuses: []corev1.ContainerStatus{
+				{
+					Name: "api",
+					LastTerminationState: corev1.ContainerState{
+						Terminated: &corev1.ContainerStateTerminated{
+							Reason:     "Error",
+							ExitCode:   42,
+							FinishedAt: metav1.NewTime(base),
+						},
+					},
+				},
+			},
+		},
+	}
+
+	client := fake.NewSimpleClientset(pod)
+	inspector := NewInspector(client)
+	inspector.logFetcher = func(_ context.Context, _, _, _ string, _ int64, previous bool) (string, error) {
+		if previous {
+			return "unable to retrieve container logs for containerd://deadbeef", nil
+		}
+		return "starting\nfailing on purpose", nil
+	}
+
+	report, err := inspector.Inspect(context.Background(), Request{
+		Namespace: "prod",
+		PodName:   "api-pod",
+		TailLines: 5,
+		Limit:     10,
+	})
+	if err != nil {
+		t.Fatalf("Inspect() error = %v", err)
+	}
+
+	if len(report.Entries) != 1 {
+		t.Fatalf("len(report.Entries) = %d, want 1", len(report.Entries))
+	}
+	if report.Entries[0].TailLogs != "starting\nfailing on purpose" {
+		t.Fatalf("tail logs = %q, want fallback current logs", report.Entries[0].TailLogs)
+	}
+	if report.Entries[0].TailLogSource != TailLogSourceCurrent {
+		t.Fatalf("tail log source = %q, want %q", report.Entries[0].TailLogSource, TailLogSourceCurrent)
+	}
+	if len(report.Warnings) == 0 || !strings.Contains(report.Warnings[0], "Showing current container logs instead.") {
+		t.Fatalf("expected fallback warning, got %#v", report.Warnings)
 	}
 }

@@ -9,6 +9,13 @@ const (
 	SourceLastTerminationState Source = "lastTerminationState"
 )
 
+type TailLogSource string
+
+const (
+	TailLogSourcePrevious TailLogSource = "previous"
+	TailLogSourceCurrent  TailLogSource = "current"
+)
+
 type Request struct {
 	Namespace   string
 	ContextName string
@@ -28,11 +35,12 @@ type CrashReport struct {
 }
 
 type CrashEntry struct {
-	Container string    `json:"container,omitempty"`
-	Timestamp time.Time `json:"timestamp"`
-	Reason    string    `json:"reason"`
-	ExitCode  *int      `json:"exitCode,omitempty"`
-	Message   string    `json:"message,omitempty"`
-	TailLogs  string    `json:"tailLogs,omitempty"`
-	Source    Source    `json:"source"`
+	Container     string        `json:"container,omitempty"`
+	Timestamp     time.Time     `json:"timestamp"`
+	Reason        string        `json:"reason"`
+	ExitCode      *int          `json:"exitCode,omitempty"`
+	Message       string        `json:"message,omitempty"`
+	TailLogs      string        `json:"tailLogs,omitempty"`
+	TailLogSource TailLogSource `json:"tailLogSource,omitempty"`
+	Source        Source        `json:"source"`
 }
