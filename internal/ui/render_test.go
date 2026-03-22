@@ -1,4 +1,4 @@
-package ui
+package ui_test
 
 import (
 	"bytes"
@@ -9,6 +9,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/rohankaran/kubectl-crashloop/internal/crashloop"
+	"github.com/rohankaran/kubectl-crashloop/internal/ui"
 )
 
 func TestRenderJSONProducesMachineReadableOutput(t *testing.T) {
@@ -17,19 +18,17 @@ func TestRenderJSONProducesMachineReadableOutput(t *testing.T) {
 	report := crashloop.CrashReport{
 		PodName:   "api-pod",
 		Namespace: "prod",
-		Entries: []crashloop.CrashEntry{
-			{
-				Container: "api",
-				Timestamp: time.Date(2026, 3, 15, 12, 0, 0, 0, time.UTC),
-				Reason:    "OOMKilled",
-				Source:    crashloop.SourceLastTerminationState,
-			},
-		},
+		Entries: []crashloop.CrashEntry{{
+			Container: "api",
+			Timestamp: time.Date(2026, 3, 15, 12, 0, 0, 0, time.UTC),
+			Reason:    "OOMKilled",
+			Source:    crashloop.SourceLastTerminationState,
+		}},
 	}
 
-	out, err := Render(report, RenderOptions{
-		Format:    OutputJSON,
-		ColorMode: ColorAlways,
+	out, err := ui.Render(report, ui.RenderOptions{
+		Format:    ui.OutputJSON,
+		ColorMode: ui.ColorAlways,
 		Width:     100,
 		Writer:    &bytes.Buffer{},
 	})
@@ -80,9 +79,9 @@ func TestRenderTableGroupsEntriesWithoutANSIWhenColorNever(t *testing.T) {
 		},
 	}
 
-	out, err := Render(report, RenderOptions{
-		Format:    OutputTable,
-		ColorMode: ColorNever,
+	out, err := ui.Render(report, ui.RenderOptions{
+		Format:    ui.OutputTable,
+		ColorMode: ui.ColorNever,
 		Width:     100,
 		Writer:    &bytes.Buffer{},
 	})
@@ -108,22 +107,20 @@ func TestRenderTableLabelsCurrentLogsFallback(t *testing.T) {
 	report := crashloop.CrashReport{
 		PodName:   "api-pod",
 		Namespace: "prod",
-		Entries: []crashloop.CrashEntry{
-			{
-				Container:     "api",
-				Timestamp:     time.Date(2026, 3, 15, 12, 0, 0, 0, time.UTC),
-				Reason:        "Error",
-				ExitCode:      &exit42,
-				TailLogs:      "starting\nfailing on purpose",
-				TailLogSource: crashloop.TailLogSourceCurrent,
-				Source:        crashloop.SourceLastTerminationState,
-			},
-		},
+		Entries: []crashloop.CrashEntry{{
+			Container:     "api",
+			Timestamp:     time.Date(2026, 3, 15, 12, 0, 0, 0, time.UTC),
+			Reason:        "Error",
+			ExitCode:      &exit42,
+			TailLogs:      "starting\nfailing on purpose",
+			TailLogSource: crashloop.TailLogSourceCurrent,
+			Source:        crashloop.SourceLastTerminationState,
+		}},
 	}
 
-	out, err := Render(report, RenderOptions{
-		Format:    OutputTable,
-		ColorMode: ColorNever,
+	out, err := ui.Render(report, ui.RenderOptions{
+		Format:    ui.OutputTable,
+		ColorMode: ui.ColorNever,
 		Width:     100,
 		Writer:    &bytes.Buffer{},
 	})
@@ -142,21 +139,19 @@ func TestRenderTableHonorsNarrowWidths(t *testing.T) {
 	report := crashloop.CrashReport{
 		PodName:   "api-pod",
 		Namespace: "prod",
-		Entries: []crashloop.CrashEntry{
-			{
-				Container: "api",
-				Timestamp: time.Date(2026, 3, 15, 12, 0, 0, 0, time.UTC),
-				Reason:    "BackOff",
-				Message:   "Back-off restarting failed container api in pod api-pod_prod with a deliberately long message for wrapping",
-				Source:    crashloop.SourceEvent,
-			},
-		},
+		Entries: []crashloop.CrashEntry{{
+			Container: "api",
+			Timestamp: time.Date(2026, 3, 15, 12, 0, 0, 0, time.UTC),
+			Reason:    "BackOff",
+			Message:   "Back-off restarting failed container api in pod api-pod_prod with a deliberately long message for wrapping",
+			Source:    crashloop.SourceEvent,
+		}},
 	}
 
 	width := 48
-	out, err := Render(report, RenderOptions{
-		Format:    OutputTable,
-		ColorMode: ColorNever,
+	out, err := ui.Render(report, ui.RenderOptions{
+		Format:    ui.OutputTable,
+		ColorMode: ui.ColorNever,
 		Width:     width,
 		Writer:    &bytes.Buffer{},
 	})

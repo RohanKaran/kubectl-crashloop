@@ -16,29 +16,6 @@ import (
 	"github.com/rohankaran/kubectl-crashloop/internal/version"
 )
 
-type inspectOptions struct {
-	PodName   string
-	Container string
-	TailLines int64
-	Limit     int
-}
-
-type inspectFunc func(context.Context, *genericclioptions.ConfigFlags, inspectOptions) (*crashloop.CrashReport, error)
-
-type commandDependencies struct {
-	inspect inspectFunc
-	demo    func() crashloop.CrashReport
-	version version.Info
-}
-
-type rootOptions struct {
-	container string
-	tailLines int64
-	limit     int
-	output    string
-	color     string
-}
-
 func Execute() error {
 	return newRootCmd(defaultDependencies()).Execute()
 }

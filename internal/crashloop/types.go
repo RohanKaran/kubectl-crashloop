@@ -1,6 +1,11 @@
 package crashloop
 
-import "time"
+import (
+	"context"
+	"time"
+
+	corev1 "k8s.io/api/core/v1"
+)
 
 type Source string
 
@@ -15,6 +20,10 @@ const (
 	TailLogSourcePrevious TailLogSource = "previous"
 	TailLogSourceCurrent  TailLogSource = "current"
 )
+
+type logFetcher func(context.Context, string, string, string, int64, bool) (string, error)
+
+type InspectorOption func(*Inspector)
 
 type Request struct {
 	Namespace   string
@@ -43,4 +52,15 @@ type CrashEntry struct {
 	TailLogs      string        `json:"tailLogs,omitempty"`
 	TailLogSource TailLogSource `json:"tailLogSource,omitempty"`
 	Source        Source        `json:"source"`
+}
+
+type containerStatusRef struct {
+	Name   string
+	Status corev1.ContainerStatus
+}
+
+type podLogRequest struct {
+	namespace string
+	podName   string
+	tailLines int64
 }
