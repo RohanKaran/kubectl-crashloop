@@ -19,12 +19,14 @@ import (
 
 var fieldPathContainerPattern = regexp.MustCompile(`\{([^}]+)\}`)
 
+// Inspector assembles crash reports from pod state, warning Events, and logs.
 type Inspector struct {
 	client     kubernetes.Interface
 	logFetcher logFetcher
 	now        func() time.Time
 }
 
+// NewInspector constructs an Inspector backed by the provided Kubernetes client.
 func NewInspector(client kubernetes.Interface, opts ...InspectorOption) *Inspector {
 	inspector := &Inspector{
 		client:     client,
@@ -41,6 +43,7 @@ func NewInspector(client kubernetes.Interface, opts ...InspectorOption) *Inspect
 	return inspector
 }
 
+// WithLogFetcher overrides log retrieval, primarily for tests.
 func WithLogFetcher(fetcher logFetcher) InspectorOption {
 	return func(i *Inspector) {
 		if fetcher != nil {
@@ -49,6 +52,7 @@ func WithLogFetcher(fetcher logFetcher) InspectorOption {
 	}
 }
 
+// WithNowFunc overrides the clock used when stamping generated reports.
 func WithNowFunc(now func() time.Time) InspectorOption {
 	return func(i *Inspector) {
 		if now != nil {
@@ -57,6 +61,7 @@ func WithNowFunc(now func() time.Time) InspectorOption {
 	}
 }
 
+// Inspect builds a crash report for the requested pod and optional container.
 func (i *Inspector) Inspect(ctx context.Context, req Request) (*CrashReport, error) {
 	report := &CrashReport{
 		PodName:     req.PodName,
@@ -624,7 +629,9 @@ func defaultLogFetcher(client kubernetes.Interface) logFetcher {
 		if err != nil {
 			return "", err
 		}
-		defer stream.Close()
+		defer func() {
+			_ = stream.Close()
+		}()
 
 		payload, err := io.ReadAll(stream)
 		if err != nil {

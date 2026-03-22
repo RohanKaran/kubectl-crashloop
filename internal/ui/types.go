@@ -1,3 +1,4 @@
+// Package ui renders crash reports for terminal and JSON output.
 package ui
 
 import (
@@ -9,23 +10,29 @@ import (
 	"github.com/rohankaran/kubectl-crashloop/internal/crashloop"
 )
 
+// WidthAuto asks the renderer to detect or choose a default width.
 const WidthAuto = 0
 
+// OutputFormat selects the report serialization format.
 type OutputFormat string
 
+// Supported output formats.
 const (
 	OutputTable OutputFormat = "table"
 	OutputJSON  OutputFormat = "json"
 )
 
+// ColorMode controls ANSI color usage in rendered terminal output.
 type ColorMode string
 
+// Supported color modes.
 const (
 	ColorAuto   ColorMode = "auto"
 	ColorAlways ColorMode = "always"
 	ColorNever  ColorMode = "never"
 )
 
+// RenderOptions controls how a crash report is rendered.
 type RenderOptions struct {
 	Format    OutputFormat
 	ColorMode ColorMode

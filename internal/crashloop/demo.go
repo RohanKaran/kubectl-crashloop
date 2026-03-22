@@ -2,6 +2,7 @@ package crashloop
 
 import "time"
 
+// DemoReport returns a deterministic sample report used by docs and demos.
 func DemoReport() CrashReport {
 	base := time.Date(2026, 3, 15, 14, 30, 0, 0, time.UTC)
 	exit137 := 137

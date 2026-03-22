@@ -14,6 +14,7 @@ import (
 	"github.com/rohankaran/kubectl-crashloop/internal/crashloop"
 )
 
+// ParseOutputFormat validates and normalizes the requested output format.
 func ParseOutputFormat(raw string) (OutputFormat, error) {
 	switch OutputFormat(strings.ToLower(strings.TrimSpace(raw))) {
 	case OutputTable:
@@ -25,6 +26,7 @@ func ParseOutputFormat(raw string) (OutputFormat, error) {
 	}
 }
 
+// ParseColorMode validates and normalizes the requested color mode.
 func ParseColorMode(raw string) (ColorMode, error) {
 	switch ColorMode(strings.ToLower(strings.TrimSpace(raw))) {
 	case ColorAuto:
@@ -38,6 +40,7 @@ func ParseColorMode(raw string) (ColorMode, error) {
 	}
 }
 
+// Render renders a crash report in either JSON or table format.
 func Render(report crashloop.CrashReport, opts RenderOptions) (string, error) {
 	switch opts.Format {
 	case OutputJSON:
@@ -183,13 +186,12 @@ func renderGroup(theme theme, group group, width int) string {
 		Width(width).
 		Wrap(true).
 		StyleFunc(func(row, col int) lipgloss.Style {
-			switch {
-			case row == table.HeaderRow:
+			if row == table.HeaderRow {
 				return theme.headerCell
-			default:
-				entry := group.entries[row]
-				return styleForCell(theme, entry, row, col)
 			}
+
+			entry := group.entries[row]
+			return styleForCell(theme, entry, row, col)
 		})
 
 	return lipgloss.JoinVertical(

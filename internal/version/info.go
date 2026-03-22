@@ -1,5 +1,7 @@
+// Package version exposes build metadata embedded at link time.
 package version
 
+// Info contains build metadata for the current binary.
 type Info struct {
 	Version string `json:"version"`
 	Commit  string `json:"commit"`
@@ -12,6 +14,7 @@ var (
 	buildDate    = "unknown"
 )
 
+// Get returns the current build metadata.
 func Get() Info {
 	return Info{
 		Version: buildVersion,

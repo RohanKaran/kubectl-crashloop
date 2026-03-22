@@ -1,3 +1,4 @@
+// Package main boots the kubectl-crashloop CLI binary.
 package main
 
 import (

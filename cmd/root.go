@@ -1,3 +1,4 @@
+// Package cmd wires the kubectl-crashloop CLI commands and flags.
 package cmd
 
 import (
@@ -16,6 +17,7 @@ import (
 	"github.com/rohankaran/kubectl-crashloop/internal/version"
 )
 
+// Execute runs the root kubectl-crashloop command.
 func Execute() error {
 	return newRootCmd(defaultDependencies()).Execute()
 }
@@ -68,19 +70,19 @@ func newRootCmd(deps commandDependencies) *cobra.Command {
 	rootCmd.PersistentFlags().StringVarP(&opts.output, "output", "o", string(ui.OutputTable), "Output format: table or json")
 	rootCmd.PersistentFlags().StringVar(&opts.color, "color", string(ui.ColorAuto), "Color mode: auto, always, or never")
 
-	rootCmd.AddCommand(newDemoCmd(deps, configFlags, &opts))
+	rootCmd.AddCommand(newDemoCmd(deps, &opts))
 	rootCmd.AddCommand(newVersionCmd(deps.version))
 
 	return rootCmd
 }
 
-func newDemoCmd(deps commandDependencies, configFlags *genericclioptions.ConfigFlags, opts *rootOptions) *cobra.Command {
+func newDemoCmd(deps commandDependencies, opts *rootOptions) *cobra.Command {
 	return &cobra.Command{
 		Use:           "demo",
 		Short:         "Render a deterministic demo report for README screenshots and VHS tapes",
 		SilenceErrors: true,
 		SilenceUsage:  true,
-		RunE: func(cmd *cobra.Command, args []string) error {
+		RunE: func(cmd *cobra.Command, _ []string) error {
 			report := deps.demo()
 			format, err := ui.ParseOutputFormat(opts.output)
 			if err != nil {
@@ -109,7 +111,7 @@ func newVersionCmd(info version.Info) *cobra.Command {
 		Short:         "Print build metadata",
 		SilenceErrors: true,
 		SilenceUsage:  true,
-		RunE: func(cmd *cobra.Command, args []string) error {
+		RunE: func(cmd *cobra.Command, _ []string) error {
 			_, err := fmt.Fprintf(
 				cmd.OutOrStdout(),
 				"kubectl-crashloop %s\ncommit: %s\ndate: %s\n",
