@@ -542,7 +542,6 @@ func (i *Inspector) resolveCurrentLogsForEvent(ctx context.Context, logRequest p
 		)
 	}
 
-	payload = strings.TrimSpace(payload)
 	if payload == "" {
 		return "", fmt.Sprintf("No last termination state was available for container %q, and current logs were empty.", container)
 	}
@@ -564,7 +563,6 @@ func (i *Inspector) resolveCurrentLogsForEvent(ctx context.Context, logRequest p
 func (i *Inspector) resolveTailLogs(ctx context.Context, logRequest podLogRequest, container string) (string, TailLogSource, string) {
 	payload, err := i.logFetcher(ctx, logRequest.namespace, logRequest.podName, container, logRequest.tailLines, true)
 	if err == nil {
-		payload = strings.TrimSpace(payload)
 		switch reason := unavailableLogsReason(payload); {
 		case reason != "":
 			return i.fallbackToCurrentLogs(ctx, logRequest, container, reason)
@@ -589,7 +587,6 @@ func (i *Inspector) fallbackToCurrentLogs(ctx context.Context, logRequest podLog
 		)
 	}
 
-	payload = strings.TrimSpace(payload)
 	if payload == "" {
 		return "", "", fmt.Sprintf("Previous logs for container %q were unavailable: %s", container, previousFailure)
 	}
@@ -643,14 +640,13 @@ func defaultLogFetcher(client kubernetes.Interface) logFetcher {
 }
 
 func unavailableLogsReason(payload string) string {
-	trimmed := strings.TrimSpace(payload)
-	lower := strings.ToLower(trimmed)
+	lower := strings.ToLower(payload)
 
 	switch {
 	case strings.Contains(lower, "unable to retrieve container logs for"):
-		return trimmed
+		return payload
 	case strings.Contains(lower, "previous terminated container"):
-		return trimmed
+		return payload
 	default:
 		return ""
 	}
