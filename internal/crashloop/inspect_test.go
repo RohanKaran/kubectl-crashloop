@@ -262,6 +262,73 @@ func TestInspectSupportsMultiContainerSortingAndFilter(t *testing.T) {
 	}
 }
 
+func TestInspectKeepsPodWideEventsUnattributed(t *testing.T) {
+	t.Parallel()
+
+	base := time.Date(2026, 3, 22, 6, 1, 3, 0, time.UTC)
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "api-pod",
+			Namespace: "prod",
+			UID:       "pod-uid",
+		},
+		Status: corev1.PodStatus{
+			ContainerStatuses: []corev1.ContainerStatus{
+				{
+					Name: "api",
+					State: corev1.ContainerState{
+						Waiting: &corev1.ContainerStateWaiting{Reason: "ContainerCreating"},
+					},
+				},
+			},
+		},
+	}
+
+	event := &corev1.Event{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:              "failed-mount",
+			Namespace:         "prod",
+			CreationTimestamp: metav1.NewTime(base),
+		},
+		InvolvedObject: corev1.ObjectReference{
+			UID:       "pod-uid",
+			Namespace: "prod",
+			Name:      "api-pod",
+		},
+		Type:          corev1.EventTypeWarning,
+		Reason:        "FailedMount",
+		Message:       "Unable to attach or mount volumes: unmounted volumes=[data]",
+		LastTimestamp: metav1.NewTime(base),
+	}
+
+	client := fake.NewSimpleClientset(pod, event)
+	inspector := NewInspector(client)
+	inspector.logFetcher = func(context.Context, string, string, string, int64, bool) (string, error) {
+		t.Fatal("log fetcher should not be called for unattributed pod-wide events")
+		return "", nil
+	}
+
+	report, err := inspector.Inspect(context.Background(), Request{
+		Namespace: "prod",
+		PodName:   "api-pod",
+		TailLines: 5,
+		Limit:     10,
+	})
+	if err != nil {
+		t.Fatalf("Inspect() error = %v", err)
+	}
+
+	if len(report.Entries) != 1 {
+		t.Fatalf("len(report.Entries) = %d, want 1", len(report.Entries))
+	}
+	if report.Entries[0].Container != "" {
+		t.Fatalf("entry container = %q, want pod-wide event", report.Entries[0].Container)
+	}
+	if report.Entries[0].TailLogs != "" {
+		t.Fatalf("tail logs = %q, want none for pod-wide event", report.Entries[0].TailLogs)
+	}
+}
+
 func TestInspectWarnsWhenPreviousLogsAreUnavailable(t *testing.T) {
 	t.Parallel()
 
@@ -451,5 +518,78 @@ func TestInspectFallsBackToCurrentLogsWhenPreviousLogsPayloadIsUnavailable(t *te
 	}
 	if len(report.Warnings) == 0 || !strings.Contains(report.Warnings[0], "Showing current container logs instead.") {
 		t.Fatalf("expected fallback warning, got %#v", report.Warnings)
+	}
+}
+
+func TestInspectDoesNotMergeDistinctGenericErrorCrashes(t *testing.T) {
+	t.Parallel()
+
+	base := time.Date(2026, 3, 22, 6, 1, 3, 0, time.UTC)
+	exit1 := 1
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "api-pod",
+			Namespace: "prod",
+			UID:       "pod-uid",
+		},
+		Status: corev1.PodStatus{
+			ContainerStatuses: []corev1.ContainerStatus{
+				{
+					Name: "api",
+					LastTerminationState: corev1.ContainerState{
+						Terminated: &corev1.ContainerStateTerminated{
+							Reason:     "Error",
+							ExitCode:   int32(exit1),
+							Message:    "process exited unexpectedly",
+							FinishedAt: metav1.NewTime(base),
+						},
+					},
+				},
+			},
+		},
+	}
+
+	event := &corev1.Event{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:              "api-error",
+			Namespace:         "prod",
+			CreationTimestamp: metav1.NewTime(base.Add(2 * time.Second)),
+		},
+		InvolvedObject: corev1.ObjectReference{
+			UID:       "pod-uid",
+			Namespace: "prod",
+			Name:      "api-pod",
+			FieldPath: "spec.containers{api}",
+		},
+		Type:          corev1.EventTypeWarning,
+		Reason:        "Error",
+		Message:       "Container api failed during startup probe handling",
+		LastTimestamp: metav1.NewTime(base.Add(2 * time.Second)),
+	}
+
+	client := fake.NewSimpleClientset(pod, event)
+	inspector := NewInspector(client)
+	inspector.logFetcher = func(context.Context, string, string, string, int64, bool) (string, error) {
+		return "stderr output", nil
+	}
+
+	report, err := inspector.Inspect(context.Background(), Request{
+		Namespace: "prod",
+		PodName:   "api-pod",
+		TailLines: 5,
+		Limit:     10,
+	})
+	if err != nil {
+		t.Fatalf("Inspect() error = %v", err)
+	}
+
+	if len(report.Entries) != 2 {
+		t.Fatalf("len(report.Entries) = %d, want 2 distinct entries", len(report.Entries))
+	}
+	if report.Entries[0].Source != SourceEvent {
+		t.Fatalf("first source = %q, want %q", report.Entries[0].Source, SourceEvent)
+	}
+	if report.Entries[1].Source != SourceLastTerminationState {
+		t.Fatalf("second source = %q, want %q", report.Entries[1].Source, SourceLastTerminationState)
 	}
 }

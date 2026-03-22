@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/rohankaran/kubectl-crashloop/internal/crashloop"
 )
@@ -132,5 +133,40 @@ func TestRenderTableLabelsCurrentLogsFallback(t *testing.T) {
 
 	if !strings.Contains(out, "current logs:") {
 		t.Fatalf("expected current logs label in output: %q", out)
+	}
+}
+
+func TestRenderTableHonorsNarrowWidths(t *testing.T) {
+	t.Parallel()
+
+	report := crashloop.CrashReport{
+		PodName:   "api-pod",
+		Namespace: "prod",
+		Entries: []crashloop.CrashEntry{
+			{
+				Container: "api",
+				Timestamp: time.Date(2026, 3, 15, 12, 0, 0, 0, time.UTC),
+				Reason:    "BackOff",
+				Message:   "Back-off restarting failed container api in pod api-pod_prod with a deliberately long message for wrapping",
+				Source:    crashloop.SourceEvent,
+			},
+		},
+	}
+
+	width := 48
+	out, err := Render(report, RenderOptions{
+		Format:    OutputTable,
+		ColorMode: ColorNever,
+		Width:     width,
+		Writer:    &bytes.Buffer{},
+	})
+	if err != nil {
+		t.Fatalf("Render() error = %v", err)
+	}
+
+	for _, line := range strings.Split(out, "\n") {
+		if utf8.RuneCountInString(line) > width {
+			t.Fatalf("line exceeded width %d: %q", width, line)
+		}
 	}
 }

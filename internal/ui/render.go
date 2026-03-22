@@ -228,7 +228,7 @@ func renderGroup(theme theme, group group, width int) string {
 		BorderHeader(true).
 		Headers("TIME", "REASON", "EXIT", "SRC", "DETAILS").
 		Rows(rows...).
-		Width(maxInt(width, 72)).
+		Width(width).
 		Wrap(true).
 		StyleFunc(func(row, col int) lipgloss.Style {
 			switch {
@@ -351,11 +351,4 @@ func sortEntries(entries []crashloop.CrashEntry) {
 	sort.Slice(entries, func(i, j int) bool {
 		return entries[i].Timestamp.After(entries[j].Timestamp)
 	})
-}
-
-func maxInt(a, b int) int {
-	if a > b {
-		return a
-	}
-	return b
 }

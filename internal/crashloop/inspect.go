@@ -134,12 +134,6 @@ func (i *Inspector) buildEventEntries(ctx context.Context, pod *corev1.Pod, stat
 	}
 
 	entries := make([]CrashEntry, 0, len(items))
-	implicitContainer := ""
-	if selectedContainer != "" {
-		implicitContainer = selectedContainer
-	} else if len(containerNames) == 1 {
-		implicitContainer = containerNames[0]
-	}
 
 	for _, event := range items {
 		if event.InvolvedObject.UID != pod.UID || event.Type != corev1.EventTypeWarning {
@@ -152,10 +146,6 @@ func (i *Inspector) buildEventEntries(ctx context.Context, pod *corev1.Pod, stat
 		}
 
 		containerName := inferContainerName(event, containerNames)
-		if containerName == "" {
-			containerName = implicitContainer
-		}
-
 		if selectedContainer != "" && containerName != selectedContainer {
 			continue
 		}
@@ -336,13 +326,13 @@ func sameCrash(a, b CrashEntry) bool {
 	aMessage := strings.ToLower(a.Message)
 	bMessage := strings.ToLower(b.Message)
 
-	if aReason != "" && bReason != "" && aReason == bReason {
+	if reasonsStronglyMatch(aReason, bReason) {
 		return true
 	}
-	if aReason != "" && strings.Contains(bMessage, aReason) {
+	if reasonExplainsMessage(aReason, bMessage) {
 		return true
 	}
-	if bReason != "" && strings.Contains(aMessage, bReason) {
+	if reasonExplainsMessage(bReason, aMessage) {
 		return true
 	}
 
@@ -351,8 +341,7 @@ func sameCrash(a, b CrashEntry) bool {
 			continue
 		}
 
-		code := strconv.Itoa(*entry.ExitCode)
-		if strings.Contains(aMessage, code) || strings.Contains(bMessage, code) {
+		if explicitlyMentionsExitCode(aMessage, *entry.ExitCode) || explicitlyMentionsExitCode(bMessage, *entry.ExitCode) {
 			return true
 		}
 	}
@@ -408,6 +397,51 @@ func entryRichness(entry CrashEntry) int {
 		score++
 	}
 	return score
+}
+
+func reasonsStronglyMatch(aReason, bReason string) bool {
+	if aReason == "" || bReason == "" || aReason != bReason {
+		return false
+	}
+
+	return isSpecificMergeReason(aReason)
+}
+
+func reasonExplainsMessage(reason, message string) bool {
+	if !isSpecificMergeReason(reason) || message == "" {
+		return false
+	}
+
+	return strings.Contains(message, reason)
+}
+
+func isSpecificMergeReason(reason string) bool {
+	switch strings.TrimSpace(reason) {
+	case "", "error", "warning", "terminated", "backoff", "crashloopbackoff":
+		return false
+	default:
+		return true
+	}
+}
+
+func explicitlyMentionsExitCode(message string, code int) bool {
+	if strings.TrimSpace(message) == "" {
+		return false
+	}
+
+	codeString := strconv.Itoa(code)
+	for _, phrase := range []string{
+		"exit code " + codeString,
+		"exit status " + codeString,
+		"exited with code " + codeString,
+		"returned " + codeString,
+	} {
+		if strings.Contains(message, phrase) {
+			return true
+		}
+	}
+
+	return false
 }
 
 func (i *Inspector) attachCurrentLogsToEventEntries(
