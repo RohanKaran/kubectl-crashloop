@@ -1,6 +1,10 @@
 dist/
 .gocache/
+.gomodcache/
+.gopath/
+.cache/
 demo.gif
 plugin.yaml
 .DS_Store
 .gocache
+process.md

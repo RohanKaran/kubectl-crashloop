@@ -3,7 +3,6 @@ package ui
 import (
 	"encoding/json"
 	"fmt"
-	"io"
 	"sort"
 	"strings"
 	"time"
@@ -15,56 +14,7 @@ import (
 	"github.com/rohankaran/kubectl-crashloop/internal/crashloop"
 )
 
-const WidthAuto = 0
-
-type OutputFormat string
-
-const (
-	OutputTable OutputFormat = "table"
-	OutputJSON  OutputFormat = "json"
-)
-
-type ColorMode string
-
-const (
-	ColorAuto   ColorMode = "auto"
-	ColorAlways ColorMode = "always"
-	ColorNever  ColorMode = "never"
-)
-
-type RenderOptions struct {
-	Format    OutputFormat
-	ColorMode ColorMode
-	Width     int
-	Writer    io.Writer
-}
-
-type group struct {
-	label     string
-	timestamp time.Time
-	entries   []crashloop.CrashEntry
-}
-
-type theme struct {
-	renderer      *lipgloss.Renderer
-	headerBox     lipgloss.Style
-	title         lipgloss.Style
-	meta          lipgloss.Style
-	warning       lipgloss.Style
-	empty         lipgloss.Style
-	section       lipgloss.Style
-	border        lipgloss.Style
-	headerCell    lipgloss.Style
-	oddCell       lipgloss.Style
-	evenCell      lipgloss.Style
-	timeCell      lipgloss.Style
-	detailsCell   lipgloss.Style
-	sourceEvent   lipgloss.Style
-	sourceLast    lipgloss.Style
-	reasonError   lipgloss.Style
-	reasonWarning lipgloss.Style
-}
-
+// ParseOutputFormat validates and normalizes the requested output format.
 func ParseOutputFormat(raw string) (OutputFormat, error) {
 	switch OutputFormat(strings.ToLower(strings.TrimSpace(raw))) {
 	case OutputTable:
@@ -76,6 +26,7 @@ func ParseOutputFormat(raw string) (OutputFormat, error) {
 	}
 }
 
+// ParseColorMode validates and normalizes the requested color mode.
 func ParseColorMode(raw string) (ColorMode, error) {
 	switch ColorMode(strings.ToLower(strings.TrimSpace(raw))) {
 	case ColorAuto:
@@ -89,6 +40,7 @@ func ParseColorMode(raw string) (ColorMode, error) {
 	}
 }
 
+// Render renders a crash report in either JSON or table format.
 func Render(report crashloop.CrashReport, opts RenderOptions) (string, error) {
 	switch opts.Format {
 	case OutputJSON:
@@ -98,10 +50,13 @@ func Render(report crashloop.CrashReport, opts RenderOptions) (string, error) {
 		}
 		return string(payload), nil
 	case OutputTable:
+		return renderTable(report, opts)
 	default:
 		return "", fmt.Errorf("unsupported output format %q", opts.Format)
 	}
+}
 
+func renderTable(report crashloop.CrashReport, opts RenderOptions) (string, error) {
 	if opts.Width <= 0 {
 		opts.Width = 100
 	}
@@ -228,16 +183,15 @@ func renderGroup(theme theme, group group, width int) string {
 		BorderHeader(true).
 		Headers("TIME", "REASON", "EXIT", "SRC", "DETAILS").
 		Rows(rows...).
-		Width(maxInt(width, 72)).
+		Width(width).
 		Wrap(true).
 		StyleFunc(func(row, col int) lipgloss.Style {
-			switch {
-			case row == table.HeaderRow:
+			if row == table.HeaderRow {
 				return theme.headerCell
-			default:
-				entry := group.entries[row]
-				return styleForCell(theme, entry, row, col)
 			}
+
+			entry := group.entries[row]
+			return styleForCell(theme, entry, row, col)
 		})
 
 	return lipgloss.JoinVertical(
@@ -293,12 +247,23 @@ func renderDetails(entry crashloop.CrashEntry) string {
 		parts = append(parts, entry.Message)
 	}
 	if strings.TrimSpace(entry.TailLogs) != "" {
-		parts = append(parts, "logs:\n"+entry.TailLogs)
+		parts = append(parts, renderTailLogsLabel(entry)+":\n"+entry.TailLogs)
 	}
 	if len(parts) == 0 {
 		return "n/a"
 	}
 	return strings.Join(parts, "\n")
+}
+
+func renderTailLogsLabel(entry crashloop.CrashEntry) string {
+	switch entry.TailLogSource {
+	case crashloop.TailLogSourceCurrent:
+		return "current logs"
+	case crashloop.TailLogSourcePrevious:
+		return "previous logs"
+	default:
+		return "logs"
+	}
 }
 
 func groupEntries(entries []crashloop.CrashEntry) []group {
@@ -340,11 +305,4 @@ func sortEntries(entries []crashloop.CrashEntry) {
 	sort.Slice(entries, func(i, j int) bool {
 		return entries[i].Timestamp.After(entries[j].Timestamp)
 	})
-}
-
-func maxInt(a, b int) int {
-	if a > b {
-		return a
-	}
-	return b
 }

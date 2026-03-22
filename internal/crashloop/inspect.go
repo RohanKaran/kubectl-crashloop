@@ -19,27 +19,49 @@ import (
 
 var fieldPathContainerPattern = regexp.MustCompile(`\{([^}]+)\}`)
 
-type logFetcher func(context.Context, string, string, string, int64) (string, error)
-
+// Inspector assembles crash reports from pod state, warning Events, and logs.
 type Inspector struct {
 	client     kubernetes.Interface
 	logFetcher logFetcher
 	now        func() time.Time
 }
 
-type containerStatusRef struct {
-	Name   string
-	Status corev1.ContainerStatus
-}
-
-func NewInspector(client kubernetes.Interface) *Inspector {
-	return &Inspector{
+// NewInspector constructs an Inspector backed by the provided Kubernetes client.
+func NewInspector(client kubernetes.Interface, opts ...InspectorOption) *Inspector {
+	inspector := &Inspector{
 		client:     client,
 		logFetcher: defaultLogFetcher(client),
 		now:        time.Now,
 	}
+
+	for _, opt := range opts {
+		if opt != nil {
+			opt(inspector)
+		}
+	}
+
+	return inspector
 }
 
+// WithLogFetcher overrides log retrieval, primarily for tests.
+func WithLogFetcher(fetcher logFetcher) InspectorOption {
+	return func(i *Inspector) {
+		if fetcher != nil {
+			i.logFetcher = fetcher
+		}
+	}
+}
+
+// WithNowFunc overrides the clock used when stamping generated reports.
+func WithNowFunc(now func() time.Time) InspectorOption {
+	return func(i *Inspector) {
+		if now != nil {
+			i.now = now
+		}
+	}
+}
+
+// Inspect builds a crash report for the requested pod and optional container.
 func (i *Inspector) Inspect(ctx context.Context, req Request) (*CrashReport, error) {
 	report := &CrashReport{
 		PodName:     req.PodName,
@@ -53,13 +75,19 @@ func (i *Inspector) Inspect(ctx context.Context, req Request) (*CrashReport, err
 		return nil, err
 	}
 
+	logRequest := podLogRequest{
+		namespace: req.Namespace,
+		podName:   req.PodName,
+		tailLines: req.TailLines,
+	}
+
 	statuses := collectStatuses(pod)
 	selectedStatuses, err := filterStatuses(statuses, req.Container)
 	if err != nil {
 		return nil, err
 	}
 
-	baselineEntries, baselineWarnings := i.buildBaselineEntries(ctx, req, selectedStatuses)
+	baselineEntries, baselineWarnings := i.buildBaselineEntries(ctx, logRequest, selectedStatuses)
 	report.Warnings = append(report.Warnings, baselineWarnings...)
 
 	eventEntries, eventWarnings, err := i.buildEventEntries(ctx, pod, statuses, req.Container)
@@ -71,7 +99,9 @@ func (i *Inspector) Inspect(ctx context.Context, req Request) (*CrashReport, err
 			return nil, err
 		}
 	} else {
+		eventEntries, eventLogWarnings := i.attachCurrentLogsToEventEntries(ctx, logRequest, selectedStatuses, baselineEntries, eventEntries)
 		report.Warnings = append(report.Warnings, eventWarnings...)
+		report.Warnings = append(report.Warnings, eventLogWarnings...)
 		if len(eventEntries) == 0 && len(baselineEntries) > 0 {
 			report.Warnings = append(report.Warnings, "Historical Events may have expired on this cluster; showing baseline pod termination state.")
 		}
@@ -87,7 +117,7 @@ func (i *Inspector) Inspect(ctx context.Context, req Request) (*CrashReport, err
 	return report, nil
 }
 
-func (i *Inspector) buildBaselineEntries(ctx context.Context, req Request, statuses []containerStatusRef) ([]CrashEntry, []string) {
+func (i *Inspector) buildBaselineEntries(ctx context.Context, logRequest podLogRequest, statuses []containerStatusRef) ([]CrashEntry, []string) {
 	entries := make([]CrashEntry, 0, len(statuses))
 	var warnings []string
 
@@ -109,11 +139,13 @@ func (i *Inspector) buildBaselineEntries(ctx context.Context, req Request, statu
 			entry.Message = fmt.Sprintf("Terminated by signal %d.", terminated.Signal)
 		}
 
-		logs, err := i.logFetcher(ctx, req.Namespace, req.PodName, status.Name, req.TailLines)
-		if err != nil {
-			warnings = append(warnings, fmt.Sprintf("Unable to fetch previous logs for container %q: %v", status.Name, err))
-		} else {
-			entry.TailLogs = strings.TrimSpace(logs)
+		logs, source, warning := i.resolveTailLogs(ctx, logRequest, status.Name)
+		if warning != "" {
+			warnings = append(warnings, warning)
+		}
+		if logs != "" {
+			entry.TailLogs = logs
+			entry.TailLogSource = source
 		}
 
 		entries = append(entries, entry)
@@ -130,12 +162,6 @@ func (i *Inspector) buildEventEntries(ctx context.Context, pod *corev1.Pod, stat
 	}
 
 	entries := make([]CrashEntry, 0, len(items))
-	implicitContainer := ""
-	if selectedContainer != "" {
-		implicitContainer = selectedContainer
-	} else if len(containerNames) == 1 {
-		implicitContainer = containerNames[0]
-	}
 
 	for _, event := range items {
 		if event.InvolvedObject.UID != pod.UID || event.Type != corev1.EventTypeWarning {
@@ -148,10 +174,6 @@ func (i *Inspector) buildEventEntries(ctx context.Context, pod *corev1.Pod, stat
 		}
 
 		containerName := inferContainerName(event, containerNames)
-		if containerName == "" {
-			containerName = implicitContainer
-		}
-
 		if selectedContainer != "" && containerName != selectedContainer {
 			continue
 		}
@@ -332,13 +354,13 @@ func sameCrash(a, b CrashEntry) bool {
 	aMessage := strings.ToLower(a.Message)
 	bMessage := strings.ToLower(b.Message)
 
-	if aReason != "" && bReason != "" && aReason == bReason {
+	if reasonsStronglyMatch(aReason, bReason) {
 		return true
 	}
-	if aReason != "" && strings.Contains(bMessage, aReason) {
+	if reasonExplainsMessage(aReason, bMessage) {
 		return true
 	}
-	if bReason != "" && strings.Contains(aMessage, bReason) {
+	if reasonExplainsMessage(bReason, aMessage) {
 		return true
 	}
 
@@ -347,8 +369,7 @@ func sameCrash(a, b CrashEntry) bool {
 			continue
 		}
 
-		code := strconv.Itoa(*entry.ExitCode)
-		if strings.Contains(aMessage, code) || strings.Contains(bMessage, code) {
+		if explicitlyMentionsExitCode(aMessage, *entry.ExitCode) || explicitlyMentionsExitCode(bMessage, *entry.ExitCode) {
 			return true
 		}
 	}
@@ -378,6 +399,9 @@ func mergePair(a, b CrashEntry) CrashEntry {
 	}
 	if primary.TailLogs == "" {
 		primary.TailLogs = secondary.TailLogs
+		primary.TailLogSource = secondary.TailLogSource
+	} else if primary.TailLogSource == "" {
+		primary.TailLogSource = secondary.TailLogSource
 	}
 	if primary.Source != SourceLastTerminationState && secondary.Source == SourceLastTerminationState {
 		primary.Source = secondary.Source
@@ -403,6 +427,186 @@ func entryRichness(entry CrashEntry) int {
 	return score
 }
 
+func reasonsStronglyMatch(aReason, bReason string) bool {
+	if aReason == "" || bReason == "" || aReason != bReason {
+		return false
+	}
+
+	return isSpecificMergeReason(aReason)
+}
+
+func reasonExplainsMessage(reason, message string) bool {
+	if !isSpecificMergeReason(reason) || message == "" {
+		return false
+	}
+
+	return strings.Contains(message, reason)
+}
+
+func isSpecificMergeReason(reason string) bool {
+	switch strings.TrimSpace(reason) {
+	case "", "error", "warning", "terminated", "backoff", "crashloopbackoff":
+		return false
+	default:
+		return true
+	}
+}
+
+func explicitlyMentionsExitCode(message string, code int) bool {
+	if strings.TrimSpace(message) == "" {
+		return false
+	}
+
+	codeString := strconv.Itoa(code)
+	for _, phrase := range []string{
+		"exit code " + codeString,
+		"exit status " + codeString,
+		"exited with code " + codeString,
+		"returned " + codeString,
+	} {
+		if strings.Contains(message, phrase) {
+			return true
+		}
+	}
+
+	return false
+}
+
+func (i *Inspector) attachCurrentLogsToEventEntries(
+	ctx context.Context,
+	logRequest podLogRequest,
+	statuses []containerStatusRef,
+	baselineEntries []CrashEntry,
+	eventEntries []CrashEntry,
+) ([]CrashEntry, []string) {
+	if len(eventEntries) == 0 {
+		return eventEntries, nil
+	}
+
+	baselineContainers := make(map[string]struct{}, len(baselineEntries))
+	for _, entry := range baselineEntries {
+		if strings.TrimSpace(entry.Container) == "" {
+			continue
+		}
+		baselineContainers[entry.Container] = struct{}{}
+	}
+
+	latestEventIndex := make(map[string]int, len(eventEntries))
+	for idx, entry := range eventEntries {
+		if strings.TrimSpace(entry.Container) == "" {
+			continue
+		}
+
+		currentIdx, ok := latestEventIndex[entry.Container]
+		if !ok || eventEntries[currentIdx].Timestamp.Before(entry.Timestamp) {
+			latestEventIndex[entry.Container] = idx
+		}
+	}
+
+	var warnings []string
+	for _, status := range statuses {
+		if _, ok := baselineContainers[status.Name]; ok {
+			continue
+		}
+
+		idx, ok := latestEventIndex[status.Name]
+		if !ok {
+			continue
+		}
+		if strings.TrimSpace(eventEntries[idx].TailLogs) != "" {
+			continue
+		}
+
+		logs, warning := i.resolveCurrentLogsForEvent(ctx, logRequest, status.Name)
+		if warning != "" {
+			warnings = append(warnings, warning)
+		}
+		if logs == "" {
+			continue
+		}
+
+		eventEntries[idx].TailLogs = logs
+		eventEntries[idx].TailLogSource = TailLogSourceCurrent
+	}
+
+	return eventEntries, warnings
+}
+
+func (i *Inspector) resolveCurrentLogsForEvent(ctx context.Context, logRequest podLogRequest, container string) (string, string) {
+	payload, err := i.logFetcher(ctx, logRequest.namespace, logRequest.podName, container, logRequest.tailLines, false)
+	if err != nil {
+		return "", fmt.Sprintf(
+			"No last termination state was available for container %q, and current logs could not be fetched: %v",
+			container,
+			err,
+		)
+	}
+
+	if payload == "" {
+		return "", fmt.Sprintf("No last termination state was available for container %q, and current logs were empty.", container)
+	}
+
+	if reason := unavailableLogsReason(payload); reason != "" {
+		return "", fmt.Sprintf(
+			"No last termination state was available for container %q, and current logs were unavailable: %s",
+			container,
+			reason,
+		)
+	}
+
+	return payload, fmt.Sprintf(
+		"No last termination state was available for container %q; showing current container logs on the latest warning event.",
+		container,
+	)
+}
+
+func (i *Inspector) resolveTailLogs(ctx context.Context, logRequest podLogRequest, container string) (string, TailLogSource, string) {
+	payload, err := i.logFetcher(ctx, logRequest.namespace, logRequest.podName, container, logRequest.tailLines, true)
+	if err == nil {
+		switch reason := unavailableLogsReason(payload); {
+		case reason != "":
+			return i.fallbackToCurrentLogs(ctx, logRequest, container, reason)
+		case payload != "":
+			return payload, TailLogSourcePrevious, ""
+		default:
+			return "", "", ""
+		}
+	}
+
+	return i.fallbackToCurrentLogs(ctx, logRequest, container, err.Error())
+}
+
+func (i *Inspector) fallbackToCurrentLogs(ctx context.Context, logRequest podLogRequest, container, previousFailure string) (string, TailLogSource, string) {
+	payload, err := i.logFetcher(ctx, logRequest.namespace, logRequest.podName, container, logRequest.tailLines, false)
+	if err != nil {
+		return "", "", fmt.Sprintf(
+			"Previous logs for container %q were unavailable: %s. Current log fallback failed: %v",
+			container,
+			previousFailure,
+			err,
+		)
+	}
+
+	if payload == "" {
+		return "", "", fmt.Sprintf("Previous logs for container %q were unavailable: %s", container, previousFailure)
+	}
+
+	if reason := unavailableLogsReason(payload); reason != "" {
+		return "", "", fmt.Sprintf(
+			"Previous logs for container %q were unavailable: %s. Current log fallback was also unavailable: %s",
+			container,
+			previousFailure,
+			reason,
+		)
+	}
+
+	return payload, TailLogSourceCurrent, fmt.Sprintf(
+		"Previous logs for container %q were unavailable: %s. Showing current container logs instead.",
+		container,
+		previousFailure,
+	)
+}
+
 func sourcePriority(entry CrashEntry) int {
 	if entry.Source == SourceLastTerminationState {
 		return 0
@@ -411,10 +615,10 @@ func sourcePriority(entry CrashEntry) int {
 }
 
 func defaultLogFetcher(client kubernetes.Interface) logFetcher {
-	return func(ctx context.Context, namespace, podName, container string, tailLines int64) (string, error) {
+	return func(ctx context.Context, namespace, podName, container string, tailLines int64, previous bool) (string, error) {
 		req := client.CoreV1().Pods(namespace).GetLogs(podName, &corev1.PodLogOptions{
 			Container: container,
-			Previous:  true,
+			Previous:  previous,
 			TailLines: &tailLines,
 		})
 
@@ -422,7 +626,9 @@ func defaultLogFetcher(client kubernetes.Interface) logFetcher {
 		if err != nil {
 			return "", err
 		}
-		defer stream.Close()
+		defer func() {
+			_ = stream.Close()
+		}()
 
 		payload, err := io.ReadAll(stream)
 		if err != nil {
@@ -430,6 +636,19 @@ func defaultLogFetcher(client kubernetes.Interface) logFetcher {
 		}
 
 		return strings.TrimSpace(string(payload)), nil
+	}
+}
+
+func unavailableLogsReason(payload string) string {
+	lower := strings.ToLower(payload)
+
+	switch {
+	case strings.Contains(lower, "unable to retrieve container logs for"):
+		return payload
+	case strings.Contains(lower, "previous terminated container"):
+		return payload
+	default:
+		return ""
 	}
 }
 
