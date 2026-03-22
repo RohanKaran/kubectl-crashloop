@@ -19,6 +19,8 @@ spec:
       files:
         - from: "kubectl-crashloop"
           to: "."
+        - from: "LICENSE"
+          to: "."
       bin: "kubectl-crashloop"
     - selector:
         matchLabels:
@@ -28,6 +30,8 @@ spec:
       sha256: "__DARWIN_ARM64_SHA__"
       files:
         - from: "kubectl-crashloop"
+          to: "."
+        - from: "LICENSE"
           to: "."
       bin: "kubectl-crashloop"
     - selector:
@@ -39,6 +43,8 @@ spec:
       files:
         - from: "kubectl-crashloop"
           to: "."
+        - from: "LICENSE"
+          to: "."
       bin: "kubectl-crashloop"
     - selector:
         matchLabels:
@@ -49,6 +55,8 @@ spec:
       files:
         - from: "kubectl-crashloop"
           to: "."
+        - from: "LICENSE"
+          to: "."
       bin: "kubectl-crashloop"
     - selector:
         matchLabels:
@@ -58,5 +66,7 @@ spec:
       sha256: "__WINDOWS_AMD64_SHA__"
       files:
         - from: "kubectl-crashloop.exe"
+          to: "."
+        - from: "LICENSE"
           to: "."
       bin: "kubectl-crashloop.exe"
