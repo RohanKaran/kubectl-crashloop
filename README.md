@@ -98,13 +98,14 @@ goreleaser build --snapshot --clean
 
 1. Tag a release, for example `v0.1.0`.
 2. GitHub Actions runs GoReleaser and uploads cross-platform archives and checksums.
-3. Generate the Krew manifest:
+3. The release workflow runs `krew-release-bot`, which opens or updates the Krew PR automatically from `.krew.yaml`.
+4. If you need to inspect the rendered Krew manifest locally, generate it manually:
 
 ```bash
 ./scripts/generate-krew-manifest.sh v0.1.0
 ```
 
-4. Validate locally before opening the Krew PR:
+5. Validate locally before debugging a Krew PR:
 
 ```bash
 kubectl krew install --manifest=./plugin.yaml --archive=./dist/kubectl-crashloop_darwin_arm64.tar.gz
