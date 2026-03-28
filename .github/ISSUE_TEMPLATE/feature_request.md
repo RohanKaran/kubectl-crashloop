@@ -1,20 +1,23 @@
 ---
 name: Feature request
-about: Suggest an idea for this project
-title: ''
-labels: ''
+about: Propose an improvement to crash inspection, UX, packaging, or docs
+title: "[Feature] "
+labels: enhancement
 assignees: ''
 
 ---
 
-**Is your feature request related to a problem? Please describe.**
-A clear and concise description of what the problem is. Ex. I'm always frustrated when [...]
+**What problem are you trying to solve?**
+Describe the workflow gap, pain point, or missing capability.
 
-**Describe the solution you'd like**
-A clear and concise description of what you want to happen.
+**What would you like to happen?**
+Describe the behavior, output, or UX you want from `kubectl-crashloop`.
 
-**Describe alternatives you've considered**
-A clear and concise description of any alternative solutions or features you've considered.
+**Why is this useful?**
+Explain the user impact, incident-response value, or automation benefit.
+
+**Alternatives you've considered**
+Describe any workaround, competing command, or alternative approach you have tried.
 
 **Additional context**
-Add any other context or screenshots about the feature request here.
+Add anything else that would help, such as sample output, prior art, screenshots, or whether you would be open to contributing the change.

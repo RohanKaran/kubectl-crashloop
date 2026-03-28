@@ -1,27 +1,35 @@
 ---
 name: Bug report
-about: Create a report to help us improve
-title: ''
-labels: ''
+about: Report incorrect crash inspection behavior, output, or docs
+title: "[Bug] "
+labels: bug
 assignees: ''
 
 ---
 
 **Describe the bug**
-A clear and concise description of what the bug is.
+Describe what went wrong.
 
 **To Reproduce**
-Steps to reproduce the behavior:
-1. Go to '...'
-2. Click on '....'
-3. Scroll down to '....'
-4. See error
+Share the command you ran and the smallest set of steps needed to reproduce the problem.
+
+```bash
+kubectl crashloop POD -n namespace
+```
 
 **Expected behavior**
-A clear and concise description of what you expected to happen.
+Describe what you expected instead.
 
-**Screenshots**
-If applicable, add screenshots to help explain your problem.
+**Environment**
+- `kubectl-crashloop` version:
+- Kubernetes version:
+- OS and architecture:
+- Install method: Krew, release archive, or `go install`
+
+**Output**
+Paste any relevant terminal output, JSON output, or error messages. Redact sensitive details if needed.
 
 **Additional context**
-Add any other context about the problem here.
+Add any other context that may help, such as whether previous logs were expected, whether Events were present, or whether this was a specific container in a multi-container pod.
+
+If you believe you have found a security issue, please do not file a public bug. Use the private reporting flow in `SECURITY.md` instead.
