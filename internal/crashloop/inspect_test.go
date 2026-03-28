@@ -588,3 +588,28 @@ func TestInspectDoesNotMergeDistinctGenericErrorCrashes(t *testing.T) {
 		t.Fatalf("second source = %q, want %q", report.Entries[1].Source, crashloop.SourceLastTerminationState)
 	}
 }
+
+func TestInspectReturnsNamespaceNotFoundWhenPodNotFoundAndNamespaceIsMissing(t *testing.T) {
+	t.Parallel()
+
+	inspector := crashloop.NewInspector(
+		fake.NewSimpleClientset(),
+		crashloop.WithLogFetcher(func(context.Context, string, string, string, int64, bool) (string, error) {
+			return "", nil
+		}),
+	)
+
+	_, err := inspector.Inspect(context.Background(), crashloop.Request{
+		Namespace: "missing-ns",
+		PodName:   "api-pod",
+		TailLines: 5,
+		Limit:     10,
+	})
+	if err == nil {
+		t.Fatalf("Inspect() expected error, got nil")
+	}
+
+	if !strings.Contains(err.Error(), "namespaces \"missing-ns\" not found") {
+		t.Fatalf("expected namespace not found error, got %v", err)
+	}
+}

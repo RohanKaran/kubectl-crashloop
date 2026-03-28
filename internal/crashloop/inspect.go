@@ -72,6 +72,11 @@ func (i *Inspector) Inspect(ctx context.Context, req Request) (*CrashReport, err
 
 	pod, err := i.client.CoreV1().Pods(req.Namespace).Get(ctx, req.PodName, metav1.GetOptions{})
 	if err != nil {
+		if apierrors.IsNotFound(err) {
+			if _, nsErr := i.client.CoreV1().Namespaces().Get(ctx, req.Namespace, metav1.GetOptions{}); nsErr != nil && apierrors.IsNotFound(nsErr) {
+				return nil, nsErr
+			}
+		}
 		return nil, err
 	}
 
