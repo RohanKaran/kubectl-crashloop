@@ -8,3 +8,6 @@ plugin.yaml
 .DS_Store
 .gocache
 process.md
+tmp/
+kubectl-crashloop
+kubectl-crashloop.exe

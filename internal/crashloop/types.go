@@ -3,10 +3,7 @@
 package crashloop
 
 import (
-	"context"
 	"time"
-
-	corev1 "k8s.io/api/core/v1"
 )
 
 // Source identifies where a crash entry originated.
@@ -15,6 +12,8 @@ type Source string
 // Crash entry sources.
 const (
 	SourceEvent                Source = "event"
+	SourceNodeEvent            Source = "nodeEvent"
+	SourcePodStatus            Source = "podStatus"
 	SourceLastTerminationState Source = "lastTerminationState"
 )
 
@@ -26,11 +25,6 @@ const (
 	TailLogSourcePrevious TailLogSource = "previous"
 	TailLogSourceCurrent  TailLogSource = "current"
 )
-
-type logFetcher func(context.Context, string, string, string, int64, bool) (string, error)
-
-// InspectorOption customizes an Inspector during construction.
-type InspectorOption func(*Inspector)
 
 // Request describes which pod crash history to inspect.
 type Request struct {
@@ -62,15 +56,4 @@ type CrashEntry struct {
 	TailLogs      string        `json:"tailLogs,omitempty"`
 	TailLogSource TailLogSource `json:"tailLogSource,omitempty"`
 	Source        Source        `json:"source"`
-}
-
-type containerStatusRef struct {
-	Name   string
-	Status corev1.ContainerStatus
-}
-
-type podLogRequest struct {
-	namespace string
-	podName   string
-	tailLines int64
 }
