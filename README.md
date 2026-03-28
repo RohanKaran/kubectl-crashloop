@@ -2,7 +2,7 @@
 
 `kubectl-crashloop` is a focused `kubectl` plugin and standalone CLI for inspecting pod crash history. It merges warning Events, `LastTerminationState`, and container logs into one readable terminal report. When previous logs are unavailable, it can fall back to labeled current-container logs. JSON output is available for automation.
 
-## Features
+## Highlights
 
 - Direct pod UX for a single pod: `kubectl crashloop POD` or `kubectl-crashloop POD`
 - Best-effort log correlation: previous logs when available, labeled current-log fallback when not
@@ -76,7 +76,7 @@ This command is pod-scoped. Pass a pod name, not a Deployment name. If you want 
 
 Common flags:
 
-- `-n, --namespace` selects the namespace to inspect.
+- `-n, --namespace` optionally overrides the namespace from your current kubeconfig context. If no namespace is configured, the command falls back to `default`.
 - `--context` chooses the kubeconfig context.
 - `--kubeconfig` points at an alternate kubeconfig file.
 - `-c, --container` limits output to one container.
@@ -88,8 +88,10 @@ Common flags:
 Examples:
 
 ```bash
+kubectl crashloop payments-api-6d9c9b77d9-x2n5k
 kubectl crashloop payments-api-6d9c9b77d9-x2n5k -n production
 kubectl crashloop payments-api-6d9c9b77d9-x2n5k -n production --context staging
+kubectl crashloop demo
 kubectl-crashloop payments-api-6d9c9b77d9-x2n5k -n production -c api --tail 10
 kubectl crashloop payments-api-6d9c9b77d9-x2n5k -n production -o json
 kubectl-crashloop demo
@@ -161,7 +163,7 @@ goreleaser build --snapshot --clean
 1. Tag a release, for example `v0.1.0`.
 2. GitHub Actions runs GoReleaser and uploads cross-platform archives and checksums.
 3. The release workflow runs `krew-release-bot`, which opens or updates the Krew PR automatically.
-4. If you need to inspect the rendered Krew manifest locally, generate it manually:
+4. If you need to inspect the rendered Krew manifest locally, generate it manually from [krew-template.yaml](/Users/rohankaran/kubectl-crashloop/krew-template.yaml):
 
 ```bash
 ./scripts/generate-krew-manifest.sh v0.1.0
