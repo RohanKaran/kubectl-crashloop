@@ -17,6 +17,8 @@
 
 Krew is the recommended way to install the plugin. Once Krew is installed, install crashloop with:
 
+If you do not have Krew yet, install it first from the [official Krew installation guide](https://krew.sigs.k8s.io/docs/user-guide/setup/install/).
+
 ```bash
 kubectl krew install crashloop
 ```
