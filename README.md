@@ -62,6 +62,8 @@ go install github.com/rohankaran/kubectl-crashloop@latest
 kubectl-crashloop version
 ```
 
+Ensure your Go bin directory, such as `$(go env GOPATH)/bin` or `~/go/bin`, is in your `PATH`.
+
 ## Usage
 
 Use `kubectl crashloop` when installed through Krew, or `kubectl-crashloop` when running the standalone binary.
