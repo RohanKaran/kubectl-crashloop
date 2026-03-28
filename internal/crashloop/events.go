@@ -263,7 +263,7 @@ func nodeEventAppliesToPod(timestamp time.Time, pod *corev1.Pod, referenceTimes 
 		return false
 	}
 
-	if !pod.CreationTimestamp.IsZero() && timestamp.Before(pod.CreationTimestamp.Time.Add(-1*time.Minute)) {
+	if !pod.CreationTimestamp.IsZero() && timestamp.Before(pod.CreationTimestamp.Add(-1*time.Minute)) {
 		return false
 	}
 

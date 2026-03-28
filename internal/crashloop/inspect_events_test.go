@@ -315,7 +315,7 @@ func TestInspectKeepsEvictedStatusWhenEventListingIsForbidden(t *testing.T) {
 	}
 
 	client := fake.NewSimpleClientset(pod)
-	client.PrependReactor("list", "events", func(action k8stesting.Action) (bool, runtime.Object, error) {
+	client.PrependReactor("list", "events", func(_ k8stesting.Action) (bool, runtime.Object, error) {
 		return true, nil, apierrors.NewForbidden(schema.GroupResource{Resource: "events"}, "", errors.New("events are forbidden"))
 	})
 
