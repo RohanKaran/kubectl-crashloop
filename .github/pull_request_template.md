@@ -1,14 +1,14 @@
 ## Summary
 
-Describe the change.
+<!-- Describe the change. -->
 
 ## Why
 
-Explain the problem, motivation, or user impact.
+<!-- Explain the problem, motivation, or user impact. -->
 
 ## Testing
 
-List the commands or checks you ran.
+<!-- List the commands or checks you ran. -->
 
 ## Checklist
 
@@ -18,4 +18,4 @@ List the commands or checks you ran.
 
 ## Linked issue
 
-Reference the related issue, if any.
+<!-- Reference the related issue, if any. -->
