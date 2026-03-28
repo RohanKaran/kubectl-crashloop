@@ -163,7 +163,7 @@ goreleaser build --snapshot --clean
 1. Tag a release, for example `v0.1.0`.
 2. GitHub Actions runs GoReleaser and uploads cross-platform archives and checksums.
 3. The release workflow runs `krew-release-bot`, which opens or updates the Krew PR automatically.
-4. If you need to inspect the rendered Krew manifest locally, generate it manually from [krew-template.yaml](/Users/rohankaran/kubectl-crashloop/krew-template.yaml):
+4. If you need to inspect the rendered Krew manifest locally, generate it manually from [krew-template.yaml](krew-template.yaml):
 
 ```bash
 ./scripts/generate-krew-manifest.sh v0.1.0
