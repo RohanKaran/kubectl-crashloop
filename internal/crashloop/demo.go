@@ -44,6 +44,12 @@ func DemoReport() CrashReport {
 				TailLogSource: TailLogSourcePrevious,
 				Source:        SourceLastTerminationState,
 			},
+			{
+				Timestamp:     base.Add(7*time.Minute - 2*time.Second),
+				Reason:        "NodeMemoryPressure",
+				Message:       "Node worker-node-1 experienced memory pressure: System OOM encountered, victim process: worker",
+				Source:        SourceNodeEvent,
+			},
 		},
 	}
 }

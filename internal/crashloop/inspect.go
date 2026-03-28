@@ -166,7 +166,22 @@ func (i *Inspector) buildEventEntries(ctx context.Context, pod *corev1.Pod, stat
 		return nil, warnings, err
 	}
 
-	entries := make([]CrashEntry, 0, len(items))
+	entries := make([]CrashEntry, 0, len(items)+2)
+
+	if pod.Status.Reason == "Evicted" {
+		timestamp := pod.CreationTimestamp.Time
+		for _, cond := range pod.Status.Conditions {
+			if cond.Type == corev1.PodReady && cond.Status == corev1.ConditionFalse {
+				timestamp = cond.LastTransitionTime.Time
+			}
+		}
+		entries = append(entries, CrashEntry{
+			Timestamp: timestamp.UTC(),
+			Reason:    "Evicted",
+			Message:   firstNonEmpty(pod.Status.Message, "The pod was evicted from the node (likely due to memory or disk pressure)."),
+			Source:    SourcePodStatus,
+		})
+	}
 
 	for _, event := range items {
 		if event.InvolvedObject.UID != pod.UID || event.Type != corev1.EventTypeWarning {
@@ -197,6 +212,28 @@ func (i *Inspector) buildEventEntries(ctx context.Context, pod *corev1.Pod, stat
 		})
 	}
 
+	nodeEvents, _ := i.listNodeWarningEvents(ctx, pod.Spec.NodeName)
+	for _, event := range nodeEvents {
+		if event.Reason == "SystemOOM" || event.Reason == "OOMKilling" || strings.Contains(event.Reason, "MemoryPressure") {
+			timestamp, ok := eventTimestamp(event)
+			if !ok {
+				continue
+			}
+
+			message := strings.TrimSpace(event.Message)
+			if event.Count > 1 && message != "" {
+				message = fmt.Sprintf("%s (x%d)", message, event.Count)
+			}
+
+			entries = append(entries, CrashEntry{
+				Timestamp: timestamp.UTC(),
+				Reason:    firstNonEmpty(event.Reason, "NodeMemoryPressure"),
+				Message:   fmt.Sprintf("Node %s: %s", pod.Spec.NodeName, message),
+				Source:    SourceNodeEvent,
+			})
+		}
+	}
+
 	return entries, warnings, nil
 }
 
@@ -222,6 +259,32 @@ func (i *Inspector) listWarningEvents(ctx context.Context, namespace, podUID str
 	}
 
 	return list.Items, []string{"Event field selectors are unavailable on this cluster; falling back to a namespace-wide warning Event scan."}, nil
+}
+
+func (i *Inspector) listNodeWarningEvents(ctx context.Context, nodeName string) ([]corev1.Event, []error) {
+	if nodeName == "" {
+		return nil, nil
+	}
+
+	selector := fields.AndSelectors(
+		fields.OneTermEqualSelector("type", corev1.EventTypeWarning),
+		fields.OneTermEqualSelector("involvedObject.kind", "Node"),
+		fields.OneTermEqualSelector("involvedObject.name", nodeName),
+	)
+
+	list, err := i.client.CoreV1().Events("").List(ctx, metav1.ListOptions{FieldSelector: selector.String()})
+	if err != nil {
+		if apierrors.IsForbidden(err) || apierrors.IsUnauthorized(err) {
+			list, err = i.client.CoreV1().Events("default").List(ctx, metav1.ListOptions{FieldSelector: selector.String()})
+			if err != nil {
+				return nil, nil 
+			}
+		} else {
+			return nil, nil 
+		}
+	}
+
+	return list.Items, nil
 }
 
 func collectStatuses(pod *corev1.Pod) []containerStatusRef {

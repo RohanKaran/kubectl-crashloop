@@ -613,3 +613,141 @@ func TestInspectReturnsNamespaceNotFoundWhenPodNotFoundAndNamespaceIsMissing(t *
 		t.Fatalf("expected namespace not found error, got %v", err)
 	}
 }
+
+func TestInspectParsesPodEvictions(t *testing.T) {
+	t.Parallel()
+
+	base := time.Date(2026, 3, 22, 6, 1, 3, 0, time.UTC)
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:              "api-pod",
+			Namespace:         "prod",
+			UID:               "pod-uid",
+			CreationTimestamp: metav1.NewTime(base),
+		},
+		Status: corev1.PodStatus{
+			Phase:   corev1.PodFailed,
+			Reason:  "Evicted",
+			Message: "The node was low on resource: memory. Threshold quantity: 100Mi, available: 50Mi.",
+			Conditions: []corev1.PodCondition{
+				{
+					Type:               corev1.PodReady,
+					Status:             corev1.ConditionFalse,
+					LastTransitionTime: metav1.NewTime(base.Add(10 * time.Minute)),
+				},
+			},
+		},
+	}
+
+	inspector := crashloop.NewInspector(
+		fake.NewSimpleClientset(pod),
+		crashloop.WithLogFetcher(func(context.Context, string, string, string, int64, bool) (string, error) {
+			return "", nil
+		}),
+	)
+
+	report, err := inspector.Inspect(context.Background(), crashloop.Request{
+		Namespace: "prod",
+		PodName:   "api-pod",
+		TailLines: 5,
+		Limit:     10,
+	})
+	if err != nil {
+		t.Fatalf("Inspect() error = %v", err)
+	}
+
+	if len(report.Entries) != 1 {
+		t.Fatalf("len(report.Entries) = %d, want 1", len(report.Entries))
+	}
+	if report.Entries[0].Source != crashloop.SourcePodStatus {
+		t.Fatalf("source = %q, want %q", report.Entries[0].Source, crashloop.SourcePodStatus)
+	}
+	if report.Entries[0].Timestamp.UTC() != base.Add(10*time.Minute).UTC() {
+		t.Fatalf("timestamp = %v, want %v", report.Entries[0].Timestamp, base.Add(10*time.Minute))
+	}
+	if !strings.Contains(report.Entries[0].Message, "memory") {
+		t.Fatalf("expected eviction message, got %q", report.Entries[0].Message)
+	}
+}
+
+func TestInspectCorrelatesNodeSystemOOM(t *testing.T) {
+	t.Parallel()
+
+	base := time.Date(2026, 3, 22, 6, 1, 3, 0, time.UTC)
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "api-pod",
+			Namespace: "prod",
+			UID:       "pod-uid",
+		},
+		Spec: corev1.PodSpec{
+			NodeName: "worker-node-1",
+		},
+		Status: corev1.PodStatus{
+			ContainerStatuses: []corev1.ContainerStatus{{
+				Name: "api",
+				LastTerminationState: corev1.ContainerState{
+					Terminated: &corev1.ContainerStateTerminated{
+						Reason:     "OOMKilled",
+						ExitCode:   137,
+						FinishedAt: metav1.NewTime(base),
+					},
+				},
+			}},
+		},
+	}
+
+	nodeEvent := &corev1.Event{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:              "node-oom",
+			Namespace:         "default", // Node events usually go to default
+			CreationTimestamp: metav1.NewTime(base.Add(2 * time.Second)),
+		},
+		InvolvedObject: corev1.ObjectReference{
+			Kind: "Node",
+			Name: "worker-node-1",
+		},
+		Type:          corev1.EventTypeWarning,
+		Reason:        "SystemOOM",
+		Message:       "System OOM encountered, victim process: my-app",
+		LastTimestamp: metav1.NewTime(base.Add(2 * time.Second)),
+	}
+
+	inspector := crashloop.NewInspector(
+		fake.NewSimpleClientset(pod, nodeEvent),
+		crashloop.WithLogFetcher(func(context.Context, string, string, string, int64, bool) (string, error) {
+			return "", nil
+		}),
+	)
+
+	report, err := inspector.Inspect(context.Background(), crashloop.Request{
+		Namespace: "prod",
+		PodName:   "api-pod",
+		TailLines: 5,
+		Limit:     10,
+	})
+	if err != nil {
+		t.Fatalf("Inspect() error = %v", err)
+	}
+
+	if len(report.Entries) != 2 {
+		t.Fatalf("len(report.Entries) = %d, want 2 (Container OOM and Node OOM)", len(report.Entries))
+	}
+
+	var hasNodeEvent bool
+	for _, entry := range report.Entries {
+		if entry.Source == crashloop.SourceNodeEvent {
+			hasNodeEvent = true
+			if entry.Reason != "SystemOOM" {
+				t.Fatalf("expected Reason SystemOOM, got %q", entry.Reason)
+			}
+			if !strings.Contains(entry.Message, "worker-node-1") {
+				t.Fatalf("expected node name in message, got %q", entry.Message)
+			}
+		}
+	}
+
+	if !hasNodeEvent {
+		t.Fatal("expected report to contain a SourceNodeEvent entry")
+	}
+}

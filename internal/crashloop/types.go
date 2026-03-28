@@ -15,6 +15,8 @@ type Source string
 // Crash entry sources.
 const (
 	SourceEvent                Source = "event"
+	SourceNodeEvent            Source = "nodeEvent"
+	SourcePodStatus            Source = "podStatus"
 	SourceLastTerminationState Source = "lastTerminationState"
 )
 

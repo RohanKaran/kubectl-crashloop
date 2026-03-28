@@ -8,3 +8,4 @@ plugin.yaml
 .DS_Store
 .gocache
 process.md
+tmp/
