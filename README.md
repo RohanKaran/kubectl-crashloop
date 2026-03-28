@@ -45,14 +45,13 @@ Example for a tarball:
 
 ```bash
 tar -xzf kubectl-crashloop_<os>_<arch>.tar.gz
-sudo mv kubectl-crashloop /usr/local/bin/
 ```
+
+Move `kubectl-crashloop` to a directory in your `PATH`, for example `/usr/local/bin`, `~/bin`, or `~/.local/bin`.
 
 Example for Windows:
 
-```bash
-unzip kubectl-crashloop_windows_amd64.zip
-```
+Unpack `kubectl-crashloop.exe` from the `.zip` archive and add its directory to your `PATH`.
 
 ### From Source
 
