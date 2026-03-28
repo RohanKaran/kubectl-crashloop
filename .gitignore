@@ -10,3 +10,4 @@ plugin.yaml
 process.md
 tmp/
 kubectl-crashloop
+kubectl-crashloop.exe
