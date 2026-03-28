@@ -1,6 +1,6 @@
 # kubectl-crashloop
 
-`kubectl-crashloop` is a focused `kubectl` plugin and standalone CLI for inspecting pod crash history. It merges warning Events, `LastTerminationState`, and container logs into one readable terminal report. When previous logs are unavailable, it can surface labeled current-container logs as a fallback. JSON output is available for automation.
+`kubectl-crashloop` is a focused `kubectl` plugin and standalone CLI for inspecting pod crash history. It merges warning Events, `LastTerminationState`, and container logs into one readable terminal report. When previous logs are unavailable, it can fall back to labeled current-container logs. JSON output is available for automation.
 
 ## Features
 
@@ -11,30 +11,92 @@
 - JSON output for scripts and incident tooling
 - Cross-platform release packaging with GoReleaser and Krew metadata generation
 
-## Quick Start
+## Install
+
+### Krew
+
+Krew is the recommended way to install the plugin. Once Krew is installed, install crashloop with:
 
 ```bash
-go run . demo
-go run . my-pod -n production
-go run . my-pod -n production -o json
+kubectl krew install crashloop
+```
+
+After that, use it through `kubectl`:
+
+```bash
+kubectl crashloop version
+kubectl crashloop demo
+kubectl crashloop my-pod -n production
+```
+
+### GitHub Releases
+
+Each release publishes archives for macOS, Linux, and Windows. Download the archive that matches your OS and architecture, then unpack it and place `kubectl-crashloop` somewhere on your `PATH`.
+
+Release artifact names:
+
+- `kubectl-crashloop_darwin_amd64.tar.gz`
+- `kubectl-crashloop_darwin_arm64.tar.gz`
+- `kubectl-crashloop_linux_amd64.tar.gz`
+- `kubectl-crashloop_linux_arm64.tar.gz`
+- `kubectl-crashloop_windows_amd64.zip`
+
+Example for a tarball:
+
+```bash
+tar -xzf kubectl-crashloop_<os>_<arch>.tar.gz
+sudo mv kubectl-crashloop /usr/local/bin/
+```
+
+Example for Windows:
+
+```bash
+unzip kubectl-crashloop_windows_amd64.zip
+```
+
+### From Source
+
+If you have Go 1.26 or newer:
+
+```bash
+go install github.com/rohankaran/kubectl-crashloop@latest
+kubectl-crashloop version
 ```
 
 ## Usage
 
+Use `kubectl crashloop` when installed through Krew, or `kubectl-crashloop` when running the standalone binary.
+
 ```bash
+kubectl crashloop POD [-n namespace] [--context CTX] [--kubeconfig PATH] [-c container] [--tail 5] [--limit 10] [-o table|json] [--color auto|always|never]
 kubectl-crashloop POD [-n namespace] [--context CTX] [--kubeconfig PATH] [-c container] [--tail 5] [--limit 10] [-o table|json] [--color auto|always|never]
 ```
 
 This command is pod-scoped. Pass a pod name, not a Deployment name. If you want to inspect a Deployment, first pick one replica pod and run the tool against that pod.
 
+Common flags:
+
+- `-n, --namespace` selects the namespace to inspect.
+- `--context` chooses the kubeconfig context.
+- `--kubeconfig` points at an alternate kubeconfig file.
+- `-c, --container` limits output to one container.
+- `--tail` controls how many previous log lines are fetched per container. Default: `5`.
+- `--limit` caps the number of crash entries shown. Default: `10`.
+- `-o, --output` switches between `table` and `json`. Default: `table`.
+- `--color` controls ANSI color output. Default: `auto`.
+
 Examples:
 
 ```bash
 kubectl crashloop payments-api-6d9c9b77d9-x2n5k -n production
+kubectl crashloop payments-api-6d9c9b77d9-x2n5k -n production --context staging
 kubectl-crashloop payments-api-6d9c9b77d9-x2n5k -n production -c api --tail 10
-kubectl-crashloop payments-api-6d9c9b77d9-x2n5k -n production -o json
+kubectl crashloop payments-api-6d9c9b77d9-x2n5k -n production -o json
 kubectl-crashloop demo
+kubectl-crashloop version
 ```
+
+`demo` is a built-in subcommand that prints a stable, non-cluster-dependent report for screenshots and docs. `version` prints build metadata.
 
 ## Scope And Limits
 
@@ -77,7 +139,7 @@ rules:
 
 Prerequisites:
 
-- Go 1.26
+- Go 1.26+
 - `kubectl`
 - `goreleaser` for release validation
 - `vhs` if you want to record the README demo
@@ -98,7 +160,7 @@ goreleaser build --snapshot --clean
 
 1. Tag a release, for example `v0.1.0`.
 2. GitHub Actions runs GoReleaser and uploads cross-platform archives and checksums.
-3. The release workflow runs `krew-release-bot`, which opens or updates the Krew PR automatically from `.krew.yaml`.
+3. The release workflow runs `krew-release-bot`, which opens or updates the Krew PR automatically.
 4. If you need to inspect the rendered Krew manifest locally, generate it manually:
 
 ```bash
