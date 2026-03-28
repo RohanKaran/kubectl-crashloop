@@ -19,6 +19,8 @@ import (
 
 var fieldPathContainerPattern = regexp.MustCompile(`\{([^}]+)\}`)
 
+const nodeEventCorrelationWindow = 5 * time.Minute
+
 // Inspector assembles crash reports from pod state, warning Events, and logs.
 type Inspector struct {
 	client     kubernetes.Interface
@@ -96,6 +98,7 @@ func (i *Inspector) Inspect(ctx context.Context, req Request) (*CrashReport, err
 	report.Warnings = append(report.Warnings, baselineWarnings...)
 
 	eventEntries, eventWarnings, err := i.buildEventEntries(ctx, pod, statuses, req.Container)
+	report.Warnings = append(report.Warnings, eventWarnings...)
 	if err != nil {
 		switch {
 		case apierrors.IsForbidden(err), apierrors.IsUnauthorized(err):
@@ -105,7 +108,6 @@ func (i *Inspector) Inspect(ctx context.Context, req Request) (*CrashReport, err
 		}
 	} else {
 		eventEntries, eventLogWarnings := i.attachCurrentLogsToEventEntries(ctx, logRequest, selectedStatuses, baselineEntries, eventEntries)
-		report.Warnings = append(report.Warnings, eventWarnings...)
 		report.Warnings = append(report.Warnings, eventLogWarnings...)
 		if len(eventEntries) == 0 && len(baselineEntries) > 0 {
 			report.Warnings = append(report.Warnings, "Historical Events may have expired on this cluster; showing baseline pod termination state.")
@@ -161,26 +163,13 @@ func (i *Inspector) buildBaselineEntries(ctx context.Context, logRequest podLogR
 
 func (i *Inspector) buildEventEntries(ctx context.Context, pod *corev1.Pod, statuses []containerStatusRef, selectedContainer string) ([]CrashEntry, []string, error) {
 	containerNames := namesForStatuses(statuses)
+	relevantStatuses := filterStatusesForSelection(statuses, selectedContainer)
+	entries := buildPodStatusEntries(pod)
+	referenceTimes := relevantNodeReferenceTimes(pod, relevantStatuses)
+
 	items, warnings, err := i.listWarningEvents(ctx, pod.Namespace, string(pod.UID))
 	if err != nil {
-		return nil, warnings, err
-	}
-
-	entries := make([]CrashEntry, 0, len(items)+2)
-
-	if pod.Status.Reason == "Evicted" {
-		timestamp := pod.CreationTimestamp.Time
-		for _, cond := range pod.Status.Conditions {
-			if cond.Type == corev1.PodReady && cond.Status == corev1.ConditionFalse {
-				timestamp = cond.LastTransitionTime.Time
-			}
-		}
-		entries = append(entries, CrashEntry{
-			Timestamp: timestamp.UTC(),
-			Reason:    "Evicted",
-			Message:   firstNonEmpty(pod.Status.Message, "The pod was evicted from the node (likely due to memory or disk pressure)."),
-			Source:    SourcePodStatus,
-		})
+		return entries, warnings, err
 	}
 
 	for _, event := range items {
@@ -198,6 +187,10 @@ func (i *Inspector) buildEventEntries(ctx context.Context, pod *corev1.Pod, stat
 			continue
 		}
 
+		if isMemoryRelatedEvent(event.Reason, event.Message) {
+			referenceTimes = append(referenceTimes, timestamp.UTC())
+		}
+
 		message := strings.TrimSpace(event.Message)
 		if event.Count > 1 && message != "" {
 			message = fmt.Sprintf("%s (x%d)", message, event.Count)
@@ -212,26 +205,29 @@ func (i *Inspector) buildEventEntries(ctx context.Context, pod *corev1.Pod, stat
 		})
 	}
 
-	nodeEvents, _ := i.listNodeWarningEvents(ctx, pod.Spec.NodeName)
+	nodeEvents, nodeWarnings := i.listNodeWarningEvents(ctx, pod.Spec.NodeName)
+	warnings = append(warnings, nodeWarnings...)
 	for _, event := range nodeEvents {
-		if event.Reason == "SystemOOM" || event.Reason == "OOMKilling" || strings.Contains(event.Reason, "MemoryPressure") {
-			timestamp, ok := eventTimestamp(event)
-			if !ok {
-				continue
-			}
-
-			message := strings.TrimSpace(event.Message)
-			if event.Count > 1 && message != "" {
-				message = fmt.Sprintf("%s (x%d)", message, event.Count)
-			}
-
-			entries = append(entries, CrashEntry{
-				Timestamp: timestamp.UTC(),
-				Reason:    firstNonEmpty(event.Reason, "NodeMemoryPressure"),
-				Message:   fmt.Sprintf("Node %s: %s", pod.Spec.NodeName, message),
-				Source:    SourceNodeEvent,
-			})
+		if !isNodeMemoryWarningReason(event.Reason) {
+			continue
 		}
+
+		timestamp, ok := eventTimestamp(event)
+		if !ok || !nodeEventAppliesToPod(timestamp, pod, referenceTimes) {
+			continue
+		}
+
+		message := strings.TrimSpace(event.Message)
+		if event.Count > 1 && message != "" {
+			message = fmt.Sprintf("%s (x%d)", message, event.Count)
+		}
+
+		entries = append(entries, CrashEntry{
+			Timestamp: timestamp.UTC(),
+			Reason:    firstNonEmpty(event.Reason, "NodeMemoryPressure"),
+			Message:   fmt.Sprintf("Node %s: %s", pod.Spec.NodeName, message),
+			Source:    SourceNodeEvent,
+		})
 	}
 
 	return entries, warnings, nil
@@ -261,7 +257,7 @@ func (i *Inspector) listWarningEvents(ctx context.Context, namespace, podUID str
 	return list.Items, []string{"Event field selectors are unavailable on this cluster; falling back to a namespace-wide warning Event scan."}, nil
 }
 
-func (i *Inspector) listNodeWarningEvents(ctx context.Context, nodeName string) ([]corev1.Event, []error) {
+func (i *Inspector) listNodeWarningEvents(ctx context.Context, nodeName string) ([]corev1.Event, []string) {
 	if nodeName == "" {
 		return nil, nil
 	}
@@ -273,18 +269,37 @@ func (i *Inspector) listNodeWarningEvents(ctx context.Context, nodeName string) 
 	)
 
 	list, err := i.client.CoreV1().Events("").List(ctx, metav1.ListOptions{FieldSelector: selector.String()})
-	if err != nil {
-		if apierrors.IsForbidden(err) || apierrors.IsUnauthorized(err) {
-			list, err = i.client.CoreV1().Events("default").List(ctx, metav1.ListOptions{FieldSelector: selector.String()})
-			if err != nil {
-				return nil, nil 
-			}
-		} else {
-			return nil, nil 
+	if err == nil {
+		return filterNodeWarningEvents(list.Items, nodeName), nil
+	}
+
+	if apierrors.IsForbidden(err) || apierrors.IsUnauthorized(err) {
+		list, err = i.client.CoreV1().Events("default").List(ctx, metav1.ListOptions{FieldSelector: selector.String()})
+		if err == nil {
+			return filterNodeWarningEvents(list.Items, nodeName), nil
 		}
 	}
 
-	return list.Items, nil
+	if !apierrors.IsBadRequest(err) {
+		return nil, nil
+	}
+
+	fallbackSelector := fields.OneTermEqualSelector("type", corev1.EventTypeWarning)
+	warning := "Node Event field selectors are unavailable on this cluster; falling back to a cluster-wide warning Event scan."
+
+	list, err = i.client.CoreV1().Events("").List(ctx, metav1.ListOptions{FieldSelector: fallbackSelector.String()})
+	if err == nil {
+		return filterNodeWarningEvents(list.Items, nodeName), []string{warning}
+	}
+
+	if apierrors.IsForbidden(err) || apierrors.IsUnauthorized(err) {
+		list, err = i.client.CoreV1().Events("default").List(ctx, metav1.ListOptions{FieldSelector: fallbackSelector.String()})
+		if err == nil {
+			return filterNodeWarningEvents(list.Items, nodeName), []string{warning}
+		}
+	}
+
+	return nil, []string{warning}
 }
 
 func collectStatuses(pod *corev1.Pod) []containerStatusRef {
@@ -334,6 +349,44 @@ func namesForStatuses(statuses []containerStatusRef) []string {
 	return names
 }
 
+func filterStatusesForSelection(statuses []containerStatusRef, selected string) []containerStatusRef {
+	if selected == "" {
+		return statuses
+	}
+
+	filtered := make([]containerStatusRef, 0, 1)
+	for _, status := range statuses {
+		if status.Name == selected {
+			filtered = append(filtered, status)
+		}
+	}
+
+	return filtered
+}
+
+func buildPodStatusEntries(pod *corev1.Pod) []CrashEntry {
+	if pod.Status.Reason != "Evicted" {
+		return nil
+	}
+
+	return []CrashEntry{{
+		Timestamp: podStatusTimestamp(pod).UTC(),
+		Reason:    "Evicted",
+		Message:   firstNonEmpty(pod.Status.Message, "The pod was evicted from the node (likely due to memory or disk pressure)."),
+		Source:    SourcePodStatus,
+	}}
+}
+
+func podStatusTimestamp(pod *corev1.Pod) time.Time {
+	timestamp := pod.CreationTimestamp.Time
+	for _, cond := range pod.Status.Conditions {
+		if cond.Type == corev1.PodReady && cond.Status == corev1.ConditionFalse {
+			timestamp = cond.LastTransitionTime.Time
+		}
+	}
+	return timestamp
+}
+
 func terminatedTimestamp(terminated *corev1.ContainerStateTerminated) time.Time {
 	switch {
 	case !terminated.FinishedAt.IsZero():
@@ -374,6 +427,89 @@ func inferContainerName(event corev1.Event, containerNames []string) string {
 	}
 
 	return ""
+}
+
+func relevantNodeReferenceTimes(pod *corev1.Pod, statuses []containerStatusRef) []time.Time {
+	referenceTimes := make([]time.Time, 0, len(statuses)+1)
+
+	if pod.Status.Reason == "Evicted" {
+		referenceTimes = append(referenceTimes, podStatusTimestamp(pod).UTC())
+	}
+
+	for _, status := range statuses {
+		terminated := status.Status.LastTerminationState.Terminated
+		if terminated == nil || !isMemoryRelatedTermination(terminated) {
+			continue
+		}
+
+		referenceTimes = append(referenceTimes, terminatedTimestamp(terminated).UTC())
+	}
+
+	return referenceTimes
+}
+
+func isMemoryRelatedTermination(terminated *corev1.ContainerStateTerminated) bool {
+	reason := strings.ToLower(strings.TrimSpace(terminated.Reason))
+	message := strings.ToLower(strings.TrimSpace(terminated.Message))
+
+	return reason == "oomkilled" ||
+		terminated.ExitCode == 137 ||
+		strings.Contains(message, "out of memory") ||
+		strings.Contains(message, "oom")
+}
+
+func isMemoryRelatedEvent(reason, message string) bool {
+	lowerReason := strings.ToLower(strings.TrimSpace(reason))
+	lowerMessage := strings.ToLower(strings.TrimSpace(message))
+
+	return strings.Contains(lowerReason, "oom") ||
+		strings.Contains(lowerReason, "memorypressure") ||
+		strings.Contains(lowerMessage, "out of memory") ||
+		strings.Contains(lowerMessage, "memory pressure")
+}
+
+func isNodeMemoryWarningReason(reason string) bool {
+	normalized := strings.ToLower(strings.TrimSpace(reason))
+	return normalized == "systemoom" ||
+		normalized == "oomkilling" ||
+		strings.Contains(normalized, "memorypressure")
+}
+
+func nodeEventAppliesToPod(timestamp time.Time, pod *corev1.Pod, referenceTimes []time.Time) bool {
+	if len(referenceTimes) == 0 {
+		return false
+	}
+
+	if !pod.CreationTimestamp.IsZero() && timestamp.Before(pod.CreationTimestamp.Time.Add(-1*time.Minute)) {
+		return false
+	}
+
+	for _, reference := range referenceTimes {
+		delta := timestamp.Sub(reference)
+		if delta < 0 {
+			delta = -delta
+		}
+		if delta <= nodeEventCorrelationWindow {
+			return true
+		}
+	}
+
+	return false
+}
+
+func filterNodeWarningEvents(events []corev1.Event, nodeName string) []corev1.Event {
+	filtered := make([]corev1.Event, 0, len(events))
+	for _, event := range events {
+		if event.Type != corev1.EventTypeWarning {
+			continue
+		}
+		if event.InvolvedObject.Kind != "Node" || event.InvolvedObject.Name != nodeName {
+			continue
+		}
+		filtered = append(filtered, event)
+	}
+
+	return filtered
 }
 
 func mergeEntries(entries []CrashEntry) []CrashEntry {
