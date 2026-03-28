@@ -9,3 +9,4 @@ plugin.yaml
 .gocache
 process.md
 tmp/
+kubectl-crashloop
