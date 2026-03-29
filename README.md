@@ -33,7 +33,7 @@ kubectl crashloop my-pod -n production
 
 ### GitHub Releases
 
-Each release publishes archives for macOS, Linux, and Windows. Download the archive that matches your OS and architecture, then unpack it and place `kubectl-crashloop` somewhere on your `PATH`.
+Each release publishes archives for macOS, Linux, and Windows. Download the archive that matches your OS and architecture from the [GitHub Releases page](https://github.com/RohanKaran/kubectl-crashloop/releases), then unpack it and place `kubectl-crashloop` somewhere on your `PATH`.
 
 Release artifact names:
 
