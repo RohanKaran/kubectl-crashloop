@@ -1,4 +1,5 @@
 dist/
+blog/
 .gocache/
 .gomodcache/
 .gopath/
