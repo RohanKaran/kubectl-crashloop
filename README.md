@@ -1,11 +1,12 @@
 # kubectl-crashloop
 
-`kubectl-crashloop` is a focused `kubectl` plugin and standalone CLI for inspecting pod crash history. It merges warning Events, `LastTerminationState`, and container logs into one readable terminal report. When previous logs are unavailable, it can fall back to labeled current-container logs. JSON output is available for automation.
+`kubectl-crashloop` is a focused `kubectl` plugin and standalone CLI for inspecting pod crash history. It merges warning Events, pod termination state, eviction signals, and container logs into one readable terminal report. When previous logs are unavailable, it can fall back to labeled current-container logs. JSON output is available for automation.
 
 ## Highlights
 
 - Direct pod UX for a single pod: `kubectl crashloop POD` or `kubectl-crashloop POD`
 - Best-effort log correlation: previous logs when available, labeled current-log fallback when not
+- Eviction awareness and node-level memory-pressure correlation when Event access allows it
 - Human-first terminal output styled with `lipgloss` and `lipgloss/table`
 - Deterministic `demo` command for README screenshots, VHS tapes, and release notes
 - JSON output for scripts and incident tooling
@@ -106,14 +107,14 @@ kubectl-crashloop version
 ## Scope And Limits
 
 - Single-pod view: the command does not aggregate crash history across every pod in a Deployment, ReplicaSet, or StatefulSet.
-- Best-effort crash context: it uses Kubernetes pod status, warning Events, and current/previous log APIs.
+- Best-effort crash context: it uses Kubernetes pod status, warning Events, node warning Events when accessible, and current/previous log APIs.
 - Not a durable log store: older restart logs can still disappear from the node runtime. For retained historical logs across many restarts, use external log aggregation.
 
 ## Permissions
 
-This plugin needs namespace-scoped read access to pods, current/previous logs, and warning Events.
+This plugin works with namespace-scoped read access to pods, current/previous logs, and warning Events. For the richer node-level OOM and memory-pressure correlation added in `v0.2.0`, grant optional cluster-wide access to warning Events as well.
 
-Required verbs:
+Baseline verbs:
 
 ```text
 - get   pods
@@ -121,7 +122,7 @@ Required verbs:
 - list  events
 ```
 
-Example Role:
+Example namespaced Role:
 
 ```yaml
 apiVersion: rbac.authorization.k8s.io/v1
@@ -139,6 +140,23 @@ rules:
     resources: ["events"]
     verbs: ["list"]
 ```
+
+Optional cluster-wide Events access for node correlation:
+
+```yaml
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: kubectl-crashloop-node-events
+rules:
+  - apiGroups: [""]
+    resources: ["events"]
+    verbs: ["list"]
+```
+
+Bind that `ClusterRole` to the same user or service account that runs `kubectl-crashloop`.
+
+Without that cluster-wide Events permission, the command still works, but node-level warning correlations may be omitted and a warning may be shown in the output.
 
 ## Development
 
@@ -163,13 +181,13 @@ goreleaser build --snapshot --clean
 
 ## Release Flow
 
-1. Tag a release, for example `v0.1.0`.
+1. Tag a release, for example `v0.2.0`.
 2. GitHub Actions runs GoReleaser and uploads cross-platform archives and checksums.
 3. The release workflow runs `krew-release-bot`, which opens or updates the Krew PR automatically.
 4. If you need to inspect the rendered Krew manifest locally, generate it manually from [krew-template.yaml](krew-template.yaml):
 
 ```bash
-./scripts/generate-krew-manifest.sh v0.1.0
+./scripts/generate-krew-manifest.sh v0.2.0
 ```
 
 5. Validate locally before debugging a Krew PR:
@@ -191,6 +209,8 @@ Check that:
 
 - Warning Events appear when available
 - Baseline `LastTerminationState` appears even if Events have expired
+- Evictions appear as pod-level entries when relevant
+- Node-level OOM or memory-pressure warnings appear when cluster-wide Event access is available
 - Previous logs attach to the matching container row when available
 - Current logs appear as a labeled fallback when previous logs are unavailable
 - JSON output contains no ANSI escape sequences
